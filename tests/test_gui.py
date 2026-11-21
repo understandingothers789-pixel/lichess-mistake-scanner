@@ -7,7 +7,8 @@ from time import monotonic, sleep
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import chess
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -41,6 +42,7 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
     window.show()
     try:
         window.show_page(2)
+        assert str(tmp_path / "models" / "maia3-79m.pt") in window.scanner.model_location.text()
         window.scanner.source.setCurrentIndex(2)
         window.scanner.files = [str(pgn)]
         window.scanner.game_limit.setValue(1)
@@ -65,7 +67,19 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         assert review.ply == 6 and review.board.board.peek() == chess.Move.from_uci("g8f6")
         assert review.line_table.item(0, 0).text().startswith("Qxf7")
         point = review.line_table.visualItemRect(review.line_table.item(0, 0)).center()
-        QTest.mouseClick(review.line_table.viewport(), Qt.MouseButton.LeftButton, pos=point)
+        viewport = review.line_table.viewport()
+        QTest.mouseMove(viewport, point)
+        pump(app, lambda: review.variation_preview.isVisible())
+        preview = review.variation_preview
+        assert preview.board.board.is_checkmate()
+        assert not review.board.board.is_checkmate()
+        for delta, step in ((120, 0), (-120, 1)):
+            wheel = QWheelEvent(QPointF(point), QPointF(viewport.mapToGlobal(point)), QPoint(), QPoint(0, delta),
+                                Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                                Qt.ScrollPhase.NoScrollPhase, False)
+            QApplication.sendEvent(viewport, wheel)
+            assert preview.step == step
+        QTest.mouseClick(viewport, Qt.MouseButton.LeftButton, pos=point)
         assert review.board.board.is_checkmate()
         QTest.mouseClick(review.return_line, Qt.MouseButton.LeftButton)
         assert not review.board.board.is_checkmate()
@@ -78,12 +92,15 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         QTest.mouseClick(graph, Qt.MouseButton.LeftButton, pos=QPoint(round(origin.x()), round(origin.y() + 8)))
         assert review.ply == 0
         board = review.board
+        assert board.clocks == {chess.WHITE: 600, chess.BLACK: 600}
+        assert len(board.pieces) == 12 and all(piece.isValid() for piece in board.pieces.values())
         bounds, size = board._geometry()
         e2 = board._square(chess.E2, bounds, size).center().toPoint()
         e4 = board._square(chess.E4, bounds, size).center().toPoint()
         QTest.mouseClick(board, Qt.MouseButton.LeftButton, pos=e2)
         QTest.mouseClick(board, Qt.MouseButton.LeftButton, pos=e4)
         assert review.ply == 1
+        assert board.clocks == {chess.WHITE: 603, chess.BLACK: 600}
 
         window.engines()
         assert window.dialog.table.rowCount() == 1

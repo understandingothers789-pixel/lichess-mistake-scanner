@@ -7,7 +7,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import chess
-from PySide6.QtCore import QDate, Qt, Signal
+from PySide6.QtCore import QDate, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
     QHBoxLayout, QInputDialog, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
@@ -259,6 +260,10 @@ class ScannerView(QWidget):
         progress.addLayout(stats)
         self.worker_status = label("", "label")
         self.stage_status = label("", "muted", wrap=True)
+        self.stage_status.setToolTip(
+            "Waiting jobs are queued. An active job is counted separately. "
+            "Pausing stops new jobs from starting while current Stockfish work can finish."
+        )
         self.rate = label("", "muted")
         progress.addWidget(self.worker_status)
         progress.addWidget(self.stage_status)
@@ -289,11 +294,15 @@ class ScannerView(QWidget):
         maia_card, maia_form = self._form("Maia 3 · 79M")
         self.model_status = label("", "muted", wrap=True)
         maia_form.addRow(self.model_status)
+        self.model_location = label("", "muted", wrap=True)
+        self.model_location.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        maia_form.addRow(self.model_location)
         buttons = QHBoxLayout()
         self.download_model = button("Download model", self._maia_download)
         self.choose_model = button("Choose checkpoint…", self._maia_choose)
         buttons.addWidget(self.download_model)
         buttons.addWidget(self.choose_model)
+        buttons.addWidget(button("Open model folder", self._open_model_folder))
         buttons.addStretch()
         maia_form.addRow(buttons)
         progress_layout.addWidget(maia_card)
@@ -456,6 +465,18 @@ class ScannerView(QWidget):
         self.runner.wakeup.set()
         self.refresh()
 
+    def _model_path(self) -> Path:
+        return self.runner.checkpoint or (self.root / "models" / CHECKPOINT_NAME)
+
+    def _open_model_folder(self):
+        folder = self._model_path().parent
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+                raise OSError(f"Could not open {folder}")
+        except OSError as exc:
+            error(self, "Maia model folder", str(exc))
+
     def _maia_download(self):
         checkpoint = self.root / "models" / CHECKPOINT_NAME
 
@@ -469,7 +490,9 @@ class ScannerView(QWidget):
         self._load_maia(prepare)
 
     def _maia_choose(self):
-        name, _ = QFileDialog.getOpenFileName(self, "Choose the Maia 3 79M checkpoint", "", "Checkpoint (*.pt)")
+        name, _ = QFileDialog.getOpenFileName(
+            self, "Choose the Maia 3 79M checkpoint", str(self._model_path()), "Checkpoint (*.pt)",
+        )
         if not name:
             return
 
@@ -540,6 +563,9 @@ class ScannerView(QWidget):
             else:
                 message = "Download or choose the official checkpoint to set up the Maia CPU runtime."
             self.model_status.setText(message)
+        model_path = self._model_path()
+        location = "Checkpoint" if model_path.is_file() else "Default checkpoint path"
+        self.model_location.setText(f"{location} · {model_path}")
         self.download_model.setEnabled(self.model_task is None)
         self.choose_model.setEnabled(self.model_task is None)
 
@@ -577,10 +603,15 @@ class ScannerView(QWidget):
                   ("selected", "analyzed", "candidates", "verified", "predicted"))]
         for name, count in zip(self.metrics, counts):
             self.metrics[name].setText(f"{count:,}")
+        waiting = jobs.get(("maia", "pending"), 0)
+        processing = jobs.get(("maia", "running"), 0)
+        maia_status = f"Maia {waiting:,} waiting · {processing:,} in progress"
+        if state == "paused" and waiting:
+            maia_status += " · new jobs start on resume"
         self.stage_status.setText(
             f"Discovery {jobs.get(('discovery', 'pending'), 0):,} queued · "
             f"Verification {jobs.get(('detail', 'done'), 0):,} searched / {row['candidates']:,} candidates · "
-            f"Maia {jobs.get(('maia', 'pending'), 0):,} queued"
+            f"{maia_status}"
         )
         self._rate(row)
         transfer = info["transfer"]

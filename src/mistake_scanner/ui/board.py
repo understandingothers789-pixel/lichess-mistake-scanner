@@ -1,28 +1,40 @@
 from __future__ import annotations
 
 import math
-import os
+from pathlib import Path
 
 import chess
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QInputDialog, QSizePolicy, QToolTip, QWidget
 
 from ..model import Score
 from .theme import ACCENT, AMBER, BG, BORDER, MINT, MUTED, SURFACE
 
-LIGHT = QColor("#dce1c6")
-DARK = QColor("#759182")
-LAST_LIGHT = QColor("#c3cd8b")
-LAST_DARK = QColor("#99aa65")
-PIECES = {kind: glyph for kind, glyph in enumerate("♟♞♝♜♛♚", 1)}
+LIGHT = QColor("#f0d9b5")
+DARK = QColor("#b58863")
+LAST_LIGHT = QColor("#f5e67a")
+LAST_DARK = QColor("#ceba56")
+PIECE_ASSETS = Path(__file__).resolve().parent.parent / "assets" / "merida"
+CLOCK_HEIGHT = 30
+
+
+def clock_text(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    hours, seconds = divmod(int(seconds), 3600)
+    minutes, seconds = divmod(seconds, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
 
 
 class BoardWidget(QWidget):
     move_played = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, miniature=False):
         super().__init__(parent)
+        self.miniature = miniature
+        self.clocks: dict[chess.Color, float | None] | None = None
         self.board = chess.Board()
         self.flip = False
         self.selected = None
@@ -32,26 +44,25 @@ class BoardWidget(QWidget):
         self.hint = None
         self.arrows = set()
         self.setMouseTracking(True)
-        self.setMinimumSize(322, 288)
+        if not miniature:
+            self.setMinimumSize(322, 288)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setAccessibleName("Interactive chessboard")
-        family = "Segoe UI Symbol" if os.name == "nt" else "DejaVu Sans"
-        font = QFont(family)
-        font.setPixelSize(100)
-        self.glyphs = {}
-        for kind, glyph in PIECES.items():
-            path = QPainterPath()
-            path.addText(0, 0, font, glyph)
-            self.glyphs[kind] = path
+        self.setAccessibleName("Variation board" if miniature else "Interactive chessboard")
+        self.pieces = {}
+        for color in (chess.WHITE, chess.BLACK):
+            for kind in chess.PIECE_TYPES:
+                filename = ("w" if color else "b") + chess.piece_symbol(kind).upper() + ".svg"
+                self.pieces[color, kind] = QSvgRenderer(str(PIECE_ASSETS / filename), self)
 
     def sizeHint(self):
         return QSize(602, 568)
 
-    def set_position(self, board: chess.Board, score: Score | None, hint: str | None = None):
+    def set_position(self, board: chess.Board, score: Score | None, hint: str | None = None,
+                     *, clocks: dict[chess.Color, float | None] | None = None):
         if (self.board.fen() != board.fen() or self.board.move_stack != board.move_stack):
             self.selected = None
             self.arrows.clear()
-        self.board, self.score, self.hint = board, score, hint
+        self.board, self.score, self.hint, self.clocks = board, score, hint, clocks
         self.update()
 
     def toggle(self):
@@ -60,8 +71,11 @@ class BoardWidget(QWidget):
         self.update()
 
     def _geometry(self) -> tuple[QRectF, float]:
-        length = min(self.width() - 34, self.height()) // 8 * 8
-        return QRectF((self.width() - length - 33) / 2, (self.height() - length) / 2, length, length), length / 8
+        gutter = 0 if self.miniature else 34
+        reserved = 2 * CLOCK_HEIGHT if self.clocks is not None else 0
+        length = max(0, min(self.width() - gutter, self.height() - reserved)) // 8 * 8
+        return QRectF((self.width() - length - gutter) / 2, (self.height() - length) / 2,
+                      length, length), length / 8
 
     def _square(self, square: chess.Square, rect: QRectF, block: float) -> QRectF:
         file, rank = chess.square_file(square), chess.square_rank(square)
@@ -99,11 +113,11 @@ class BoardWidget(QWidget):
                 color = QColor("#b4c77d")
             painter.fillRect(area, color)
             painter.setFont(coords)
-            painter.setPen(QColor("#436354") if light else QColor("#edf0d7"))
-            if rank == edge_rank:
+            painter.setPen(DARK if light else LIGHT)
+            if not self.miniature and rank == edge_rank:
                 painter.drawText(area.adjusted(0, 0, -4, -2),
                                  Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight, chess.FILE_NAMES[file])
-            if file == edge_file:
+            if not self.miniature and file == edge_file:
                 painter.drawText(area.adjusted(4, 2, 0, 0),
                                  Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, str(rank + 1))
             piece = self.board.piece_at(square)
@@ -114,23 +128,33 @@ class BoardWidget(QWidget):
                 painter.setBrush(target)
                 painter.drawEllipse(area.center(), block * 0.125, block * 0.125)
             if piece is not None:
-                path = self.glyphs[piece.piece_type]
-                bounds = path.boundingRect()
-                scale = block * 0.77 / max(bounds.height(), bounds.width(), 1)
-                painter.save()
-                painter.translate(area.center())
-                painter.scale(scale, scale)
-                painter.translate(-bounds.center())
-                painter.setPen(QPen(QColor("#35483e") if piece.color else QColor("#d2ddbc"), 2.8))
-                painter.setBrush(QColor("#f6f3df") if piece.color else QColor("#26372f"))
-                painter.drawPath(path)
-                painter.restore()
+                self.pieces[piece.color, piece.piece_type].render(painter, area)
         for origin, target in self.arrows:
             self._arrow(painter, rect, block, origin, target, QColor("#306c52"))
         if self.hint:
             move = chess.Move.from_uci(self.hint)
             self._arrow(painter, rect, block, move.from_square, move.to_square, QColor("#ba7c48"))
-        self._evaluation(painter, rect)
+        if not self.miniature:
+            self._evaluation(painter, rect)
+        if self.clocks is not None:
+            self._paint_clocks(painter, rect)
+
+    def _paint_clocks(self, painter, rect):
+        font = QFont(self.font())
+        font.setBold(True)
+        font.setPixelSize(14)
+        painter.setFont(font)
+        colors = (chess.WHITE, chess.BLACK) if self.flip else (chess.BLACK, chess.WHITE)
+        for color, y in zip(colors, (rect.top() - CLOCK_HEIGHT, rect.bottom() + 4), strict=True):
+            text = clock_text(self.clocks[color])
+            width = max(70, painter.fontMetrics().horizontalAdvance(text) + 20)
+            badge = QRectF(rect.right() - width, y, width, CLOCK_HEIGHT - 4)
+            white = color == chess.WHITE
+            painter.setPen(QPen(QColor("#65746b" if color == self.board.turn else BORDER), 1))
+            painter.setBrush(QColor("#eceddf" if white else "#25312b"))
+            painter.drawRoundedRect(badge, 5, 5)
+            painter.setPen(QColor("#27372f" if white else "#eff1e8"))
+            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, text)
 
     def _arrow(self, painter, rect, block, origin, target, color):
         start = self._square(origin, rect, block).center()

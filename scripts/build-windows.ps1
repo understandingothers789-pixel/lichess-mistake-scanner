@@ -12,7 +12,9 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
     }
 
-    $options = @('--noconfirm', '--clean', '--windowed', '--onedir', '--name', 'SecondLook', '--paths', 'src')
+    $version = & $python -c "from mistake_scanner import __version__; print(__version__)"
+    if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Could not determine the package version.' }
+    $options = @('--noconfirm', '--clean', '--windowed', '--onedir', '--name', 'SecondLook', '--paths', 'src', '--collect-data', 'mistake_scanner')
     if ($WithMaia) {
         & $python -c "import maia3,torch"
         if ($LASTEXITCODE -ne 0) { throw 'Run setup-windows.ps1 -WithMaia before building with Maia.' }
@@ -28,7 +30,10 @@ try {
     Copy-Item scripts/requirements-windows.lock -Destination dist/SecondLook
     & $python scripts/bundle-notices.py dist/SecondLook
     if ($LASTEXITCODE -ne 0) { throw 'Dependency notices could not be bundled.' }
-    Compress-Archive -Path dist/SecondLook -DestinationPath dist/SecondLook-windows-x64.zip -Force
+    $folder = "dist/SecondLook-v$version"
+    if (Test-Path $folder) { Remove-Item $folder -Recurse -Force }
+    Rename-Item -LiteralPath dist/SecondLook -NewName "SecondLook-v$version"
+    Compress-Archive -Path $folder -DestinationPath dist/SecondLook-windows-x64.zip -Force
     Get-FileHash dist/SecondLook-windows-x64.zip -Algorithm SHA256
 }
 finally {

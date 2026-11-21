@@ -8,7 +8,7 @@ The Windows release includes the Maia CPU runtime. Extract the whole ZIP, launch
 
 ## If Smart App Control blocks SecondLook.exe
 
-Download the **Python edition**. Install **Python 3.12 x64** with the launcher from python.org, extract the ZIP, and open PowerShell in the extracted `SecondLook-Python` folder. [Official Python 3.12 Windows installer](https://www.python.org/downloads/release/python-31210/)
+Download the **Python edition**. Install **Python 3.12 x64** with the launcher from python.org, extract the ZIP, and open PowerShell in the extracted versioned `SecondLook-Python-v…` folder. [Official Python 3.12 Windows installer](https://www.python.org/downloads/release/python-31210/)
 
 ~~~powershell
 py -3.12 launch.py
@@ -34,6 +34,8 @@ Without the optional Maia runtime, omit `-WithMaia`. Stockfish verification work
 3. Choose a source and filters in **Scanner**, then select **Start scan**. The default limit is 250 selected games. Set it to **Unlimited** for an unrestricted scan.
 4. Open a result in **Library → Discoveries**. The default order is highest Maia probability first, then larger Stockfish loss. A dash means a probability is unavailable or pending.
 
+The default Maia checkpoint is `%LOCALAPPDATA%\LichessMistakeScanner\models\maia3-79m.pt`. Scanner shows the actual configured path. **Open model folder** opens its folder, and **Choose checkpoint** starts at that path. **Ready** means a checkpoint is configured. **Waiting** counts Maia jobs still queued, separate from jobs **in progress** and **complete**. Pausing prevents new jobs from starting while active Stockfish work can finish and queue more Maia jobs.
+
 The library, engine profiles, sources, and model use a separate `LichessMistakeScanner` application data directory under `%LOCALAPPDATA%` on Windows. The `--data-dir PATH` option selects a different library. The application has no dependency on Nocturne.
 
 ## Game sources
@@ -50,8 +52,8 @@ Pause stops new work from being scheduled and lets active analysis finish. On re
 
 - **Reanalyze** queues a new scan of the saved game with the selected engine and current settings. Both results remain in the library.
 - The **game score** opens any played move and includes variations in the original PGN. Click the **evaluation graph** to seek through the game, or use **Previous/Next Moment** to jump between findings.
-- **Before move** and **After move** show stored Stockfish lines, search depths, acceptable moves, and Maia probabilities. Hover for a board preview and the complete continuation. Click a line and use Left/Right to step through it. **Main line** returns to the result.
-- Click or drag a piece for a legal side variation. Right-drag draws an arrow. The evaluation bar and graph use White's perspective. The **View** menu controls dockable panels.
+- **Before move** and **After move** show stored Stockfish lines, search depths, acceptable moves, and Maia probabilities. Hover a line to open a miniature board. Keep the pointer over the line and scroll down to advance or up to go back. Click a line to play it on the main board and use Left/Right to step through it. **Main line** returns to the result.
+- Saved game clocks appear above and below the board when reviewing games. A dash marks an unavailable recorded time. Click or drag a piece for a legal side variation. Right-drag draws an arrow. The evaluation bar and graph use White's perspective. The **View** menu controls dockable panels.
 - **All Maia moves** shows the full legal-move distribution. **Position occurrences** shows empirical counts from analyzed games and links to their source positions. Bookmarks and the last selected position are saved.
 - **Export** on an analysis supports original or annotated PGN, FEN, CSV, JSON, and puzzle positions with solutions. The library can export selected items or a filtered collection. Annotated PGN includes compatible evaluation comments, continuations, and engine identity.
 

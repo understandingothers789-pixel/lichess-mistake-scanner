@@ -6,7 +6,7 @@ from pathlib import Path
 import chess
 import chess.pgn
 from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtGui import QColor, QCursor, QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QDialog, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from ..exports import san_line, write_export
 from ..model import Score, Variation, board_at, position_key
 from .board import BoardWidget, EvalGraph
+from .preview import VariationPreview
 from .theme import ACCENT, AMBER, MUTED, Task, button, cell, error, label, score_color, table
 
 FORMATS = {
@@ -60,6 +61,20 @@ def _clock(seconds: float | None) -> str:
     return f"{minutes}:{seconds:02d}"
 
 
+def recorded_clocks(game: dict, ply: int) -> dict[chess.Color, float | None]:
+    """Reconstruct both clocks from the actual game at the selected mainline ply."""
+    root = chess.Board(game["root"])
+    base, separator, increment = (game.get("time_control") or "").partition("+")
+    starting_time = int(base) if (root.fen() == chess.STARTING_FEN and separator
+                                  and base.isdigit() and increment.isdigit()) else None
+    clocks = {chess.WHITE: starting_time, chess.BLACK: starting_time}
+    side = root.turn
+    for seconds in game.get("clocks", ())[:ply]:
+        clocks[side] = seconds
+        side = not side
+    return clocks
+
+
 def _prob(value) -> str:
     if value is None:
         return "—"
@@ -82,7 +97,7 @@ class Review(QWidget):
         self.ply = 0
         self.branch = []
         self.step = 0
-        self.preview = None
+        self.variation_preview = VariationPreview(self)
         self.fast_depth = 4
         self.position_info = {}
         self.last_signature = None
@@ -188,9 +203,9 @@ class Review(QWidget):
         self.line_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.line_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.line_table.setMouseTracking(True)
-        self.line_table.viewport().installEventFilter(self)
         self.line_table.itemEntered.connect(self._preview)
         self.line_table.cellClicked.connect(self._play_variation)
+        self.line_table.viewport().installEventFilter(self)
         self.line_table.setMinimumHeight(180)
         analysis_layout.addWidget(self.line_table, 1)
         self.summary = label("Open a discovery to see its full Stockfish variations.", "muted", wrap=True)
@@ -286,7 +301,7 @@ class Review(QWidget):
         saved = moment_id or (self.game["cursor_moment"] if ply is None else None)
         self.current = self.library.mistake(saved) if saved else None
         self.ply = self.current["ply"] - 1 if moment_id and self.current else self.game["cursor"] if ply is None else ply
-        self.branch, self.step, self.preview = [], 0, None
+        self.branch, self.step = [], 0
         profile = self.scan["profile"]
         self.heading.setText(f"{self.game['white'] or 'White'}  vs  {self.game['black'] or 'Black'}")
         metadata = [self.game["day"], (self.game["speed"] or "").capitalize(), self.game["time_control"],
@@ -407,12 +422,11 @@ class Review(QWidget):
                 self.moment_table.setItem(row, col, cell(value, AMBER if col == 1 else None, NAMES[moment["state"]]))
 
     def _render(self):
+        self.variation_preview.dismiss()
         board = self._root()
         if self.branch:
             for move in self.branch[:self.step]:
                 board.push_uci(move)
-        if self.preview and not self.branch:
-            board.push_uci(self.preview)
         moment = self.current
         deep = self.position_info.get(self.ply)
         entry = self.evaluations.get(self.ply)
@@ -456,9 +470,13 @@ class Review(QWidget):
         else:
             self.summary.setText("Select an interesting moment to inspect its before and after searches."
                                  if self.game else "Open a discovery to see its full Stockfish variations.")
-        if self.branch or self.preview:
+        if self.branch:
             score, hint = None, None
-        self.board.set_position(board, score, hint)
+        clocks = None
+        if self.game:
+            clocks = ({chess.WHITE: None, chess.BLACK: None} if self.branch and self.step
+                      else recorded_clocks(self.game, self.ply))
+        self.board.set_position(board, score, hint, clocks=clocks)
         self.graph.set_ply(self.ply)
         self.all_policy.setEnabled(policy is not None and bool(policy))
         self.occurrences.setEnabled(bool(self.game))
@@ -539,7 +557,7 @@ class Review(QWidget):
         if moment is None:
             moment = self._at_ply()
         self.current = moment
-        self.branch, self.step, self.preview = [], 0, None
+        self.branch, self.step = [], 0
         self.library.review(self.game["scan_game"], game=True, cursor=self.ply, cursor_moment=moment["id"] if moment else None)
         if self.ply in self.score_items:
             self.moves.setCurrentItem(self.score_items[self.ply])
@@ -596,33 +614,43 @@ class Review(QWidget):
         self.go(moment["ply"] - 1, moment)
 
     def _scratch(self, notation):
-        if self.preview:
-            self.branch, self.step = [self.preview], 1
         if self.game and not self.branch and self.ply < len(self.game["moves"]) and notation == self.game["moves"][self.ply]:
             self.advance(1)
             return
         self.branch = [*self.branch[:self.step], notation]
         self.step = len(self.branch)
-        self.preview = None
         self._render()
 
     def _play_variation(self, row, _):
         if row < len(self.lines):
-            self.branch, self.step, self.preview = list(self.lines[row].pv), 1, None
+            self.branch, self.step = list(self.lines[row].pv), 1
             self._render()
 
     def _preview(self, item):
-        if not self.branch and item.row() < len(self.lines) and self.lines[item.row()].pv:
-            self.preview = self.lines[item.row()].pv[0]
-            board = self._root()
-            board.push_uci(self.preview)
-            self.board.set_position(board, None)
+        row = item.row()
+        if row < len(self.lines) and self.lines[row].pv:
+            self.variation_preview.show_line(row, self._root(), self.lines[row].pv, self.board.flip, QCursor.pos())
 
     def eventFilter(self, watched, event):
-        if watched == self.line_table.viewport() and event.type() == QEvent.Type.Leave and self.preview:
-            self.preview = None
-            self._render()
+        if watched == self.line_table.viewport():
+            kind = event.type()
+            popup = self.variation_preview
+            if kind == QEvent.Type.Leave:
+                popup.dismiss()
+            elif kind == QEvent.Type.MouseMove and popup.isVisible():
+                if self.line_table.indexAt(event.position().toPoint()).isValid():
+                    popup.move_near(event.globalPosition().toPoint())
+                else:
+                    popup.dismiss()
+            elif kind == QEvent.Type.Wheel and popup.isVisible() and popup.scroll(event):
+                return True
+            elif kind == QEvent.Type.ToolTip and popup.isVisible():
+                return True
         return super().eventFilter(watched, event)
+
+    def hideEvent(self, event):
+        self.variation_preview.dismiss()
+        super().hideEvent(event)
 
     def _review(self, name, game):
         item = self.game if game else self.current

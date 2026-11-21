@@ -1,5 +1,12 @@
 # What changed
 
+## v0.1.6
+
+- Windows and Python ZIPs extract into versioned folders.
+- The board uses Nocturne’s default Classic squares and Nibbler (shaded Merida) pieces. Recorded player clocks appear at the board edges.
+- Hovering an engine continuation opens a separate miniature board. Scroll to move forward or backward through the variation.
+- Scanner shows the actual Maia checkpoint path, can open its folder, and separates waiting jobs from active inference.
+
 ## v0.1.5
 
 - Maia setup installs the missing CPU runtime in the Python edition and verifies a local prediction before reporting success.
