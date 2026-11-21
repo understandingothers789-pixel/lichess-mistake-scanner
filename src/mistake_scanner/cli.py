@@ -11,7 +11,7 @@ from pathlib import Path
 from .acquisition import api_sources, archive_sources
 from .database import Library
 from .engines import EngineManager
-from .maia import CHECKPOINT_NAME, download_checkpoint
+from .maia import CHECKPOINT_NAME, MaiaProcess, download_checkpoint
 from .model import SPEEDS, GameFilter, SearchSettings, Source, data_directory
 from .network import Network
 from .runner import Runner
@@ -59,6 +59,9 @@ def parse(argv=None):
     resume.add_argument("--maia-model", type=Path)
     model = sub.add_parser("maia-download", help="Download and verify the official Maia 3 79M checkpoint")
     model.add_argument("--destination", type=Path)
+    check = sub.add_parser("check-maia", help="Verify local CPU inference with the official Maia 3 checkpoint")
+    check.add_argument("checkpoint", type=Path)
+    check.add_argument("--report", type=Path)
     sub.add_parser("scans", help="List saved scan identities and counts")
     return parser.parse_args(argv)
 
@@ -102,6 +105,30 @@ def follow(library: Library, runner: Runner, scan_id: int) -> int:
 
 
 def _main(args) -> int:
+    if args.command == "check-maia":
+        import chess
+        import math
+
+        worker = MaiaProcess(args.checkpoint.resolve(strict=True))
+        try:
+            board = chess.Board()
+            results = []
+            for move in (None, "e4"):
+                if move is not None:
+                    board.push_san(move)
+                policy = worker.predict(board, 1800, 1800)
+                if not math.isclose(sum(policy.values()), 1, abs_tol=1e-5):
+                    raise RuntimeError("Maia did not return a normalized policy.")
+                results.append({"legal_moves": len(policy), "side": "white" if board.turn else "black"})
+        finally:
+            worker.close()
+        report = json.dumps({"rating": 1800, "positions": results})
+        if args.report:
+            args.report.write_text(report + "\n", encoding="utf-8")
+        else:
+            print(report)
+        return 0
+
     root = (args.data_dir or data_directory()).resolve()
     if args.command in (None, "gui"):
         from .gui import launch

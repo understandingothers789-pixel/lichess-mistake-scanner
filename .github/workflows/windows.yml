@@ -11,6 +11,10 @@ on:
         description: Download and test the current official Windows development build
         type: boolean
         default: true
+      pgo_engine:
+        description: Exercise the profile-guided Stockfish build
+        type: boolean
+        default: false
       compile_engine:
         description: Build native Stockfish using MSYS2 once
         type: boolean
@@ -29,9 +33,28 @@ jobs:
           python-version: '3.12'
           architecture: x64
       - name: Install fixed Windows dependencies
-        run: .\scripts\setup-windows.ps1
+        env:
+          BUNDLE_MAIA: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: .\scripts\setup-windows.ps1 -WithMaia:($env:BUNDLE_MAIA -eq 'true')
       - name: Test app and package
-        run: .\scripts\build-windows.ps1
+        env:
+          BUNDLE_MAIA: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: .\scripts\build-windows.ps1 -WithMaia:($env:BUNDLE_MAIA -eq 'true')
+      - name: Verify the bundled Maia worker
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          $checkpoint = Join-Path $env:RUNNER_TEMP 'maia3-79m.pt'
+          $report = Join-Path $env:RUNNER_TEMP 'maia-check.json'
+          & .\.venv\Scripts\python.exe -m mistake_scanner maia-download --destination $checkpoint
+          if ($LASTEXITCODE -ne 0) { throw 'Checkpoint verification failed.' }
+          $arguments = 'check-maia "{0}" --report "{1}"' -f $checkpoint, $report
+          $process = Start-Process .\dist\SecondLook\SecondLook.exe -ArgumentList $arguments -PassThru
+          if (-not $process.WaitForExit(240000)) {
+              $process.Kill()
+              throw 'The packaged Maia check timed out.'
+          }
+          if ($process.ExitCode -ne 0 -or -not (Test-Path $report)) { throw 'Bundled Maia inference failed.' }
+          Get-Content $report
       - uses: actions/upload-artifact@v4
         with:
           name: SecondLook-windows-x64
@@ -40,7 +63,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || inputs.live_engine || inputs.compile_engine
         run: .\.venv\Scripts\python.exe scripts/windows-engine-check.py
       - name: Install an isolated build toolchain on the runner
-        if: inputs.compile_engine
+        if: inputs.compile_engine || inputs.pgo_engine
         uses: msys2/setup-msys2@v2
         id: msys
         with:
@@ -48,8 +71,13 @@ jobs:
           install: make mingw-w64-ucrt-x86_64-gcc
           location: D:\sf-msys
       - name: Compile and validate native Stockfish
-        if: inputs.compile_engine
-        run: .\.venv\Scripts\python.exe scripts/windows-engine-check.py --compile --msys "${{ steps.msys.outputs.msys2-location }}"
+        if: inputs.compile_engine || inputs.pgo_engine
+        env:
+          ENABLE_PGO: ${{ inputs.pgo_engine }}
+        run: |
+          $options = @()
+          if ($env:ENABLE_PGO -eq 'true') { $options += '--pgo' }
+          .\.venv\Scripts\python.exe scripts/windows-engine-check.py @options --compile --msys "${{ steps.msys.outputs.msys2-location }}"
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

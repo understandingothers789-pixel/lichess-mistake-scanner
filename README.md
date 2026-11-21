@@ -4,7 +4,9 @@ Second Look is a standalone Windows x64 desktop application for finding chess mi
 
 [**Download Second Look for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/latest/download/SecondLook-windows-x64.zip) · [What changed](CHANGELOG.md)
 
-## Run on Windows 11
+The Windows release includes the Maia CPU runtime. Extract the whole ZIP, launch SecondLook.exe, then use **Scanner → Download model** to fetch the verified checkpoint.
+
+## Run from source on Windows 11
 
 Install **Python 3.12 x64** with the Python launcher. Install **Git for Windows** if you plan to use Maia or compile Stockfish. From the repository in PowerShell:
 

@@ -15,6 +15,7 @@ from mistake_scanner.network import Network
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compile", action="store_true")
+    parser.add_argument("--pgo", action="store_true")
     parser.add_argument("--msys", type=Path)
     args = parser.parse_args()
     if os.name != "nt":
@@ -26,7 +27,7 @@ def main():
         network = Network()
         try:
             if args.compile:
-                profile = manager.build(network, pgo=False, msys=args.msys, target="x86-64", log=print)
+                profile = manager.build(network, pgo=args.pgo, msys=args.msys, target="x86-64", log=print)
                 assert profile["bench_nps"] > 0
             else:
                 release = latest_development(network)
