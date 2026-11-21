@@ -65,7 +65,7 @@ class Window(QMainWindow):
 
         self.pages = QStackedWidget()
         layout.addWidget(self.pages, 1)
-        self.review = Review(self.library)
+        self.review = Review(self.library, self.runner)
         self.browser = LibraryView(self.library)
         self.scanner = ScannerView(self.library, self.runner, root, rules)
         for page in (self.review, self.browser, self.scanner):
@@ -154,6 +154,8 @@ class Window(QMainWindow):
         selected = self.library.engine(self.library.setting("active_engine"))
         self.engine_status.setText(selected["name"] if selected else "No engine selected")
         self.engine_status.setToolTip(selected.get("commit") or selected["path"] if selected else "Open Engine Manager to select Stockfish")
+        if self.review.live_button.isChecked():
+            self.review._render()
 
     def engines(self):
         if self.dialog is None:

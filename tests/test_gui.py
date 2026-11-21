@@ -101,6 +101,16 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         QTest.mouseClick(board, Qt.MouseButton.LeftButton, pos=e4)
         assert review.ply == 1
         assert board.clocks == {chess.WHITE: 603, chess.BLACK: 600}
+        assert review.open_source.isVisible()
+        QTest.mouseClick(review.live_button, Qt.MouseButton.LeftButton)
+        pump(app, lambda: review.position_label.text().startswith("Live Stockfish · depth"))
+        assert review.lines_board.peek() == chess.Move.from_uci("e2e4")
+        assert review.line_table.rowCount() == 5
+        review.advance(1)
+        pump(app, lambda: review.position_label.text().startswith("Live Stockfish · depth"))
+        assert review.lines_board.peek() == chess.Move.from_uci("e7e5")
+        QTest.mouseClick(review.live_button, Qt.MouseButton.LeftButton)
+        assert review.live_future is None
 
         window.engines()
         assert window.dialog.table.rowCount() == 1

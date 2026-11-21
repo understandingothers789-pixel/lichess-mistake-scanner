@@ -105,13 +105,13 @@ class UciSearch:
             self.engine.close()
             raise
 
-    def __call__(self, board: chess.Board, depth: int, count: int = 1, move: str | None = None) -> list[Variation]:
+    def __call__(self, board: chess.Board, depth: int, count: int = 1, move: str | None = None, *, seconds: float | None = None) -> list[Variation]:
         final = terminal(board)
         if final is not None:
             return [final]
         root_moves = [chess.Move.from_uci(move)] if move is not None else None
         data = self.engine.analyse(
-            board, chess.engine.Limit(depth=depth), multipv=count, root_moves=root_moves, game=self.game,
+            board, chess.engine.Limit(depth=depth, time=seconds), multipv=count, root_moves=root_moves, game=self.game,
         )
         lines = [
             Variation(tuple(m.uci() for m in info["pv"]), Score.from_uci(info["score"]),

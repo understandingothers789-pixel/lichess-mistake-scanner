@@ -5,7 +5,7 @@ from pathlib import Path
 
 import chess
 import chess.pgn
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..exports import san_line, write_export
-from ..model import Score, Variation, board_at, position_key
+from ..model import Score, SearchSettings, Variation, board_at, position_key
 from .board import BoardWidget, EvalGraph
 from .preview import VariationPreview
 from .theme import ACCENT, AMBER, MUTED, Task, button, cell, error, label, score_color, table
@@ -87,9 +87,17 @@ class Review(QWidget):
     open_scanner = Signal()
     info = Signal(str)
 
-    def __init__(self, library, parent=None):
+    def __init__(self, library, runner, parent=None):
         super().__init__(parent)
         self.library = library
+        self.runner = runner
+        self.live_key = None
+        self.live_future = None
+        self.live_lines = None
+        self.live_error = ""
+        self.live_timer = QTimer(self)
+        self.live_timer.setInterval(100)
+        self.live_timer.timeout.connect(self._poll_live)
         self.game = None
         self.scan = None
         self.moments = []
@@ -120,10 +128,13 @@ class Review(QWidget):
         self.open_source = button("Lichess game ↗", self._open_source)
         self.reanalysis_button = button("Reanalyze", lambda: self.reanalyze.emit(self.game["scan_game"]),
                                         tip="Analyze this game as a new scan with the selected engine")
+        self.live_button = button("Live Stockfish", tip="Analyze the position currently on the board")
+        self.live_button.setCheckable(True)
+        self.live_button.toggled.connect(self._toggle_live)
         self.export_button = button("Export", self._export)
         self.library_button = button("Open library", self.open_library.emit)
         self.scan_button = button("Start a scan", self.open_scanner.emit, role="primary")
-        for control in (self.open_source, self.reanalysis_button, self.export_button, self.library_button, self.scan_button):
+        for control in (self.open_source, self.live_button, self.reanalysis_button, self.export_button, self.library_button, self.scan_button):
             header.addWidget(control)
         outer.addLayout(header)
 
@@ -434,6 +445,7 @@ class Review(QWidget):
         self.line_table.setRowCount(0)
         self.lines = []
         policy = None
+        good = ()
         hint = None
         self.before.setEnabled(moment is not None)
         self.after.setEnabled(moment is not None)
@@ -449,29 +461,30 @@ class Review(QWidget):
                 self.lines = self.library.cached_search(data["after_key" if after else "before_key"]) or []
                 policy = self.library.policy(moment["after_policy" if after else "before_policy"])
                 good = data["good_after" if after else "good_before"]
-                root = self._root()
-                visible = [line for line in self.lines if line.pv]
-                self.line_table.setRowCount(len(visible))
-                for i, line in enumerate(visible):
-                    move = line.pv[0]
-                    continuation_board = root.copy()
-                    san = continuation_board.san_and_push(chess.Move.from_uci(move))
-                    continuation = san_line(continuation_board, line.pv[1:]) if len(line.pv) > 1 else "—"
-                    tip = f"{san_line(root, line.pv)}\n{'Acceptable' if move in good else 'Outside tolerance'} • d{line.depth}"
-                    if line.nodes is not None:
-                        tip += f" • {line.nodes:,} nodes"
-                    self.line_table.setItem(i, 0, cell(san + (" ✓" if move in good else ""), ACCENT if move in good else None, tip))
-                    self.line_table.setItem(i, 1, cell(line.score.display(), score_color(line.score), tip))
-                    self.line_table.setItem(i, 2, cell(continuation, None, tip))
-                    self.line_table.setItem(i, 3, cell(f"d{line.depth}", MUTED, tip))
-                    self.line_table.setItem(i, 4, cell(_prob(None if policy is None else policy.get(move)), ACCENT, tip))
-                    if i == 0:
-                        hint, score = move, line.score
         else:
             self.summary.setText("Select an interesting moment to inspect its before and after searches."
                                  if self.game else "Open a discovery to see its full Stockfish variations.")
-        if self.branch:
+        self.lines_board = self._root()
+        if self.branch and not self.live_button.isChecked():
             score, hint = None, None
+        if self.live_button.isChecked():
+            self.lines_board = board
+            self._request_live(board)
+            self.lines = self.live_lines or []
+            good = ()
+            if self.branch and self.step:
+                policy = None
+                self.maia.clear()
+                self.summary.setText("Live analysis of a variation.")
+            phase = self.live_error or ("Searching or waiting for a Stockfish worker…" if self.live_lines is None else
+                                        f"Live Stockfish · depth {self.live_lines[0].depth}" if self.live_lines[0].pv else
+                                        "Live Stockfish · game over")
+            self.position_label.setText(phase)
+        if self.lines:
+            if self.live_button.isChecked() or not self.branch:
+                score = self.lines[0].score
+                hint = self.lines[0].pv[0] if self.lines[0].pv else None
+            self._show_lines(self.lines_board, good, policy)
         clocks = None
         if self.game:
             clocks = ({chess.WHITE: None, chess.BLACK: None} if self.branch and self.step
@@ -501,6 +514,61 @@ class Review(QWidget):
         self._players()
         self.board_position.setText(f"Variation  {self.step}/{len(self.branch)}" if self.branch else
                                     f"Ply {self.ply} / {len(self.game['moves'])}" if self.game else "Starting position")
+
+    def _show_lines(self, root, good, policy):
+        self.lines = [line for line in self.lines if line.pv]
+        self.line_table.setRowCount(len(self.lines))
+        for i, line in enumerate(self.lines):
+            move = line.pv[0]
+            continuation_board = root.copy()
+            san = continuation_board.san_and_push(chess.Move.from_uci(move))
+            continuation = san_line(continuation_board, line.pv[1:]) if len(line.pv) > 1 else "—"
+            tip = f"{san_line(root, line.pv)} · d{line.depth}"
+            if not self.live_button.isChecked():
+                tip += " · Acceptable" if move in good else " · Outside tolerance"
+            if line.nodes is not None:
+                tip += f" · {line.nodes:,} nodes"
+            self.line_table.setItem(i, 0, cell(san + (" ✓" if move in good else ""), ACCENT if move in good else None, tip))
+            self.line_table.setItem(i, 1, cell(line.score.display(), score_color(line.score), tip))
+            self.line_table.setItem(i, 2, cell(continuation, None, tip))
+            self.line_table.setItem(i, 3, cell(f"d{line.depth}", MUTED, tip))
+            self.line_table.setItem(i, 4, cell(_prob(None if policy is None else policy.get(move)), ACCENT, tip))
+
+    def _toggle_live(self, enabled):
+        if not enabled:
+            self._clear_live()
+        self._render()
+
+    def _clear_live(self):
+        if self.live_future is not None:
+            self.live_future.cancel()
+        self.live_future = self.live_key = self.live_lines = None
+        self.live_error = ""
+        self.live_timer.stop()
+
+    def _request_live(self, board):
+        profile = self.library.engine(self.library.setting("active_engine"))
+        if profile is None:
+            self._clear_live()
+            self.live_error = "Select Stockfish in Engine Manager."
+            return
+        rules = SearchSettings(**self.library.setting("rules", {}))
+        identity = (profile["id"], rules, board.root().fen(), tuple(board.move_stack))
+        if identity != self.live_key:
+            self._clear_live()
+            self.live_key = identity
+            self.live_future = self.runner.analyze_position(profile, rules, board)
+            self.live_timer.start()
+
+    def _poll_live(self):
+        if self.live_future is None or not self.live_future.done():
+            return
+        self.live_timer.stop()
+        try:
+            self.live_lines = self.live_future.result()
+        except Exception as exc:
+            self.live_error = f"Stockfish: {exc}"
+        self._render()
 
     def _render_moment(self, moment, after):
         root = board_at(self.game["root"], self.game["moves"], moment["ply"] - 1)
@@ -623,13 +691,14 @@ class Review(QWidget):
 
     def _play_variation(self, row, _):
         if row < len(self.lines):
-            self.branch, self.step = list(self.lines[row].pv), 1
+            prefix = self.branch[:self.step] if self.live_button.isChecked() else []
+            self.branch, self.step = [*prefix, *self.lines[row].pv], len(prefix) + 1
             self._render()
 
     def _preview(self, item):
         row = item.row()
         if row < len(self.lines) and self.lines[row].pv:
-            self.variation_preview.show_line(row, self._root(), self.lines[row].pv, self.board.flip, QCursor.pos())
+            self.variation_preview.show_line(row, self.lines_board, self.lines[row].pv, self.board.flip, QCursor.pos())
 
     def eventFilter(self, watched, event):
         if watched == self.line_table.viewport():
@@ -650,6 +719,7 @@ class Review(QWidget):
 
     def hideEvent(self, event):
         self.variation_preview.dismiss()
+        self.live_button.setChecked(False)
         super().hideEvent(event)
 
     def _review(self, name, game):

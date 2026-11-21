@@ -30,7 +30,7 @@ class ScriptedStockfish:
         self.game = None
         self.searched = 0
 
-    def __call__(self, board, depth, count=1, move=None):
+    def __call__(self, board, depth, count=1, move=None, *, seconds=None):
         from mistake_scanner.analysis import terminal
 
         self.searched += 1
@@ -183,6 +183,10 @@ def test_real_stockfish_depth20_maia_pipeline_and_exports(tmp_path, pgn):
     rules = SearchSettings(workers=2, first_move=1)
     runner = Runner(library, rules, checkpoint)
     try:
+        live_board = chess.Board()
+        live_board.push_san("e4")
+        live = runner.analyze_position(profile, rules, live_board).result(timeout=20)
+        assert len(live) == 5 and all(chess.Move.from_uci(line.pv[0]) in live_board.legal_moves for line in live)
         identity = library.create_scan("Depth 20", [Source.local(pgn)], GameFilter(), rules, profile, 1)
         def outcome():
             progress = library.scan_progress(identity)

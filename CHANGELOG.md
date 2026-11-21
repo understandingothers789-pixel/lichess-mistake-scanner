@@ -1,5 +1,10 @@
 # What changed
 
+## v0.1.8
+
+- Toggle Live Stockfish on the Analysis tab to evaluate the current board and explore engine variations.
+- Live analysis shares the existing Stockfish worker limit and leaves saved scanner results intact.
+
 ## v0.1.7
 
 - Mistake detection starts at move 1 by default for new scans and reanalysis.

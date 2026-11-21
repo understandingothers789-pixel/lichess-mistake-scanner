@@ -6,7 +6,7 @@ import os
 import struct
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -107,6 +107,7 @@ class Runner:
         self.wakeup = threading.Event()
         self.gate = threading.RLock()
         self.futures = {}
+        self.pending_live = None
         self.maintenance = False
         self.transfer = {}
         self.last_error = ""
@@ -149,6 +150,27 @@ class Runner:
             self.maintenance = False
             self.wakeup.set()
 
+    def analyze_position(self, profile, rules, board) -> Future:
+        result = Future()
+        with self.gate:
+            if self.pending_live is not None:
+                self.pending_live[0].cancel()
+            self.pending_live = result, profile, rules, board.copy()
+            self.wakeup.set()
+        return result
+
+    def _live_search(self, result, profile, rules, board):
+        if not result.set_running_or_notify_cancel():
+            return
+        try:
+            engine = self.pool.acquire(profile, rules)
+            result.set_result(engine(board, rules.detail_depth, rules.detail_pv, seconds=2.0))
+        except Exception as exc:
+            self.pool.discard()
+            result.set_exception(exc)
+        finally:
+            self.wakeup.set()
+
     def active(self) -> dict:
         with self.gate:
             return {
@@ -159,6 +181,10 @@ class Runner:
 
     def close(self) -> None:
         self.stop.set()
+        with self.gate:
+            if self.pending_live is not None:
+                self.pending_live[0].cancel()
+                self.pending_live = None
         self.wakeup.set()
         self.dispatcher.join()
         self.intake.join()
@@ -178,8 +204,15 @@ class Runner:
                     self.futures = {f: job for f, job in self.futures.items() if not f.done()}
                     running = [job for job in self.futures.values() if job["stage"] != "maia"]
                     if not self.maintenance and len(running) < self.capacity:
+                        slots = self.capacity - len(running)
+                        if self.pending_live and not any(job["stage"] == "live" for job in running):
+                            request, self.pending_live = self.pending_live, None
+                            if not request[0].cancelled():
+                                future = self.engines.submit(self._live_search, *request)
+                                self.futures[future] = {"stage": "live"}
+                                slots -= 1
                         stages = ("detail", "discovery") if prefer_detail else ("discovery", "detail")
-                        for _ in range(self.capacity - len(running)):
+                        for _ in range(slots):
                             job = self.library.claim(stages[0]) or self.library.claim(stages[1])
                             if job is None:
                                 break

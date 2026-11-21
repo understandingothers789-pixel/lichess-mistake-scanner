@@ -50,6 +50,7 @@ Pause stops new work from being scheduled and lets active analysis finish. On re
 
 ## Review and exports
 
+- **Live Stockfish** analyzes the board position and follows navigation, including side variations. It uses the selected engine and shows the lines and depth reached in a short search. **Lichess game ↗** opens the source game in your browser.
 - **Reanalyze** queues a new scan of the saved game with the selected engine and current settings. Both results remain in the library.
 - The **game score** opens any played move and includes variations in the original PGN. Click the **evaluation graph** to seek through the game, or use **Previous/Next Moment** to jump between findings.
 - **Before move** and **After move** show stored Stockfish lines, search depths, acceptable moves, and Maia probabilities. Hover a line to open a miniature board. Keep the pointer over the line and scroll down to advance or up to go back. Click a line to play it on the main board and use Left/Right to step through it. **Main line** returns to the result.
