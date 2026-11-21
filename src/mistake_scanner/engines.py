@@ -158,7 +158,7 @@ def extract_stockfish(archive: Path, target: Path, url: str) -> Path:
         for entry in entries:
             parts = PurePosixPath(entry.filename).parts
             mode = (entry.external_attr >> 16) & 0xF000
-            if (not parts or entry.filename.startswith(("/", "\\")) or "\\" in entry.filename
+            if (not parts or entry.filename.startswith(("/", "\\")) or "\\" in entry.orig_filename
                     or any(part in ("..", ".") or not part.rstrip(" .") == part
                            or any(ch in part for ch in '<>:"|?*')
                            or re.fullmatch(r"(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?", part, re.I)

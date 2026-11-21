@@ -1,6 +1,6 @@
 # What changed
 
-## v0.1.0
+## v0.1.1
 
 - Stream monthly Lichess archives, use public game exports, or import local PGN files.
 - Discover mistakes with adaptive Stockfish searches and verify them at depth 20 with MultiPV 5.

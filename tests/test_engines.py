@@ -92,7 +92,7 @@ def test_reject_mismatched_commit_and_require_official_asset_metadata():
 @pytest.mark.parametrize("name", ["../bad", "/bad", "bad\\file", "C:/bad", "safe/con.txt", "safe/engine.exe:stream"])
 def test_extraction_rejects_unsafe_windows_zip_paths(tmp_path, name):
     archive = tmp_path / "bad.zip"
-    archive.write_bytes(zip_bytes(name, b"payload"))
+    archive.write_bytes(zip_bytes(name, b"payload").replace(b"bad/file", b"bad" + bytes([92]) + b"file"))
     with pytest.raises(ValueError, match="Unsafe ZIP"):
         engines.extract_stockfish(archive, tmp_path / "staging", "https://example.test")
 
