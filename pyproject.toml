@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=80,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lichess-mistake-scanner"
+version = "0.1.0"
+description = "Local chess mistake discovery and analysis with Stockfish and Maia 3"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "python-chess==1.999",
+    "chess==1.11.2",
+    "httpx==0.28.1",
+    "zstandard==0.25.0",
+    "psutil==7.2.2",
+    "platformdirs==4.9.2",
+    "PySide6==6.10.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.0.2"]
+build = ["pyinstaller==6.19.0"]
+maia = ["maia3 @ git+https://github.com/CSSLab/maia3.git@1e13597c42d4858b7cfd7cfdae01e297263364b2"]
+
+[project.scripts]
+mistake-scanner = "mistake_scanner.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "stockfish: uses real Stockfish specified by STOCKFISH_EXE",
+    "maia: uses the official Maia 3 79M checkpoint specified by MAIA_CHECKPOINT",
+    "windows: exercises a native Windows workflow",
+]
