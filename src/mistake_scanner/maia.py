@@ -4,6 +4,8 @@ import importlib.util
 import math
 import multiprocessing
 import os
+import subprocess
+import sys
 from collections import deque
 from pathlib import Path
 
@@ -30,6 +32,27 @@ def round_rating(white: int | None, black: int | None) -> int | None:
 
 def runtime_installed() -> bool:
     return all(importlib.util.find_spec(name) is not None for name in ("maia3", "torch"))
+
+
+def install_cpu_runtime(status) -> None:
+    """Install the pinned runtime in the Python edition's existing virtual environment."""
+    if getattr(sys, "frozen", False) or sys.prefix == sys.base_prefix:
+        raise RuntimeError("Open the Python edition with launch.py to install the Maia CPU runtime.")
+    upstream = (f"https://codeload.github.com/CSSLab/maia3/zip/{UPSTREAM_REVISION}"
+                "#sha256=f5210ea0481aba514d58524f50283496b13e219a715143f97d2d0a62b5e9e3ce")
+    for label, packages in (
+        ("Installing PyTorch CPU · first setup may take several minutes…",
+         ["--index-url", "https://download.pytorch.org/whl/cpu", "torch==2.8.0+cpu"]),
+        ("Installing the official Maia 3 runtime…", [f"maia3 @ {upstream}"]),
+    ):
+        status(label)
+        result = subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", *packages],
+                                capture_output=True, text=True, errors="replace", timeout=1200,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if result.returncode:
+            excerpt = "\n".join((result.stderr or result.stdout).splitlines()[-12:])
+            raise RuntimeError(f"Maia runtime setup failed.\n{excerpt}")
+    importlib.invalidate_caches()
 
 
 def download_checkpoint(path: Path, network: Network, progress=lambda *_: None) -> Path:

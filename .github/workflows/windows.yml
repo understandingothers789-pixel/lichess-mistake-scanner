@@ -96,6 +96,18 @@ jobs:
           python launch.py --check
           if ($LASTEXITCODE -ne 0) { throw 'Source launch failed.' }
           Pop-Location
+      - name: Test in-app Maia installation and inference in the Python edition
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: source-check/SecondLook-Python
+        run: |
+          $python = '.\.venv\Scripts\python.exe'
+          & $python -c "from mistake_scanner.maia import install_cpu_runtime; install_cpu_runtime(print)"
+          if ($LASTEXITCODE -ne 0) { throw 'In-app Maia runtime installation failed.' }
+          $checkpoint = Join-Path $env:RUNNER_TEMP 'source-maia3-79m.pt'
+          & $python -m mistake_scanner maia-download --destination $checkpoint
+          if ($LASTEXITCODE -ne 0) { throw 'Checkpoint download failed.' }
+          & $python -m mistake_scanner check-maia $checkpoint
+          if ($LASTEXITCODE -ne 0) { throw 'Source Maia inference failed.' }
       - uses: actions/upload-artifact@v4
         with:
           name: SecondLook-Python

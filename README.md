@@ -14,7 +14,7 @@ Download the **Python edition**. Install **Python 3.12 x64** with the launcher f
 py -3.12 launch.py
 ~~~
 
-The launcher installs the core app into a local virtual environment on the first run. In **Engines**, select a Stockfish executable permitted by Windows. Install **Git for Windows** and run `py -3.12 launch.py --with-maia` when you want the optional CPU runtime, then choose **Scanner → Download model**. Both editions use the same default library.
+The launcher installs the core app into a local virtual environment on the first run. In **Engines**, select a Stockfish executable permitted by Windows. For Maia, choose **Scanner → Download model** or **Choose checkpoint**. The Python edition installs any missing Maia CPU runtime in its own environment, then verifies local inference. Both editions use the same default library.
 
 Keep Smart App Control enabled. Windows evaluates the Python runtime and native dependencies independently. If Windows Security blocks a Stockfish executable or a DLL, check the file name in Protection History. An allowed build of that component is needed to use it.
 
@@ -38,11 +38,11 @@ The library, engine profiles, sources, and model use a separate `LichessMistakeS
 
 ## Game sources
 
-- **Monthly archives** discover official standard rated PGNs by month. Rating, speed, opening, date, and other game filters are applied locally before Stockfish searches. The archive month is a file partition. Use the date filters for exact game dates.
+- **Monthly archives** discover official standard rated PGNs by month. Rating, speed, opening, date, and other game filters are applied locally before Stockfish searches. Enable **Scan a single UTC day** in the archive controls and pick a date to analyze that day. Lichess serves monthly archives, so a daily scan reads the compressed monthly stream and filters by date locally.
 - **Lichess API** exports public games by username, game IDs, or supported game URL. Username exports use supported date, rating-status, speed, opponent, color, and count parameters. The same local filters apply. Requests are serial and wait at least one minute after HTTP 429.
 - **Local files** accept multiple `.pgn` and `.pgn.zst` files, including monthly dumps downloaded earlier. The scanner uses standard chess. Missing metadata remains unknown.
 
-Streaming transfers the compressed data and parses complete PGN records incrementally. It can stop at the game limit without storing the archive or reading to its end. The official checksum is checked when a stream is consumed in full. For a full, verified file, enable **Download to managed archive cache**. The application checks Lichess's published SHA-256 before opening a saved archive and resumes partial HTTP downloads when the server accepts a byte range. The cache limit includes partial files. If the limit is reached, clear unused files from the chosen cache's `lichess-monthly` folder or raise the limit. **Delete this archive after intake** removes a verified cached file after the scan has finished reading it or reached its game limit. [Lichess database](https://database.lichess.org/) · [Lichess API](https://lichess.org/api)
+Streaming transfers the compressed data and parses complete PGN records incrementally. It can stop at the game limit without storing the archive or reading to its end. The official checksum is checked when a stream is consumed in full. For a full, verified file, enable **Download to managed archive cache**. The application checks Lichess's published SHA-256 before opening a saved archive and resumes partial HTTP downloads when the server accepts a byte range. The cache limit defaults to 1 GB and includes partial files. For monthly archives larger than the cap, leave managed caching off and stream the archive. If the limit is reached, clear unused files from the chosen cache's `lichess-monthly` folder or raise the limit. **Delete this archive after intake** removes a verified cached file after the scan has finished reading it or reached its game limit. [Lichess database](https://database.lichess.org/) · [Lichess API](https://lichess.org/api)
 
 Pause stops new work from being scheduled and lets active analysis finish. On restart, interrupted scans are paused until you choose **Resume / retry**. Compressed streams may need to transfer and replay earlier records to reach the saved checkpoint. Mutable API exports are replayed against saved game identities. SQLite retains finished work and separate discovery, verification, and Maia jobs. Local files must retain the original size and modification time to resume from their saved checkpoint.
 
@@ -67,7 +67,7 @@ One shared CPU Maia process predicts only the positions involved in verified mis
 
 ## Stockfish Engine Manager
 
-**Check for updates** shows the release commit and date alongside installed development revisions. **Download dev build & activate** resolves the upstream prerelease to a full Git commit, verifies the published GitHub SHA-256, checks the Windows x64 executable in the ZIP, and validates a real UCI search. Separate profile directories retain old versions, and a verified existing installation can be reused. Changing engines applies to newly created scans. Each saved scan retains its original engine fingerprint, NNUE configuration, and search settings.
+**Check for updates** shows the release commit and date alongside installed development revisions. **Download dev build & activate** resolves the upstream prerelease to a full Git commit, verifies the published GitHub SHA-256, checks the Windows x64 executable in the ZIP, and validates a real UCI search. Separate profile directories retain old versions, and a verified existing installation can be reused. **Remove engine** also accepts the active profile once its unfinished Stockfish work is complete. Removing a managed profile frees its installation space and keeps saved analysis. Changing engines applies to newly created scans. Each saved scan retains its original engine fingerprint, NNUE configuration, and search settings.
 
 **Build from source** uses a native Windows MSYS2 toolchain with Git for Windows. In an MSYS2 **UCRT64** shell, install:
 

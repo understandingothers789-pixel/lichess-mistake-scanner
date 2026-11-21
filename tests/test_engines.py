@@ -147,6 +147,9 @@ def test_install_reuses_verified_revision_preserves_history(tmp_path, monkeypatc
     assert library.setting("active_engine") == second["id"]
     manager.remove(first)
     assert not Path(first["path"]).exists() and Path(second["path"]).is_file()
+    manager.remove(second)
+    assert not Path(second["path"]).exists()
+    assert library.setting("active_engine") is None
 
 
 def test_nnue_integrity_and_build_failure_output(tmp_path):

@@ -1,5 +1,11 @@
 # What changed
 
+## v0.1.5
+
+- Maia setup installs the missing CPU runtime in the Python edition and verifies a local prediction before reporting success.
+- Remove the active Stockfish installation when it has no unfinished Stockfish work, while keeping saved analysis.
+- Pick a single UTC day for an archive scan and use a managed cache limit as low as 1 GB. Streaming remains available for larger monthly files.
+
 ## v0.1.4
 
 - Added a Python source download and launcher for systems that block the packaged executable.

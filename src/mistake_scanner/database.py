@@ -184,11 +184,10 @@ class Library:
                        (profile["id"], encode(profile), profile["installed"]))
 
     def engine_needed(self, identity: str) -> bool:
-        if self.setting("active_engine") == identity:
-            return True
         return self.connection().execute("""
             SELECT 1 FROM scans WHERE json_extract(profile, '$.id')=?
-            AND (EXISTS (SELECT 1 FROM sources WHERE scan_id=scans.id AND state IN ('pending','running','failed'))
+            AND (((game_limit=0 OR selected<game_limit) AND EXISTS (
+                     SELECT 1 FROM sources WHERE scan_id=scans.id AND state IN ('pending','running','failed')))
                  OR EXISTS (SELECT 1 FROM jobs WHERE scan_id=scans.id AND stage!='maia' AND state!='done'))
             LIMIT 1
         """, (identity,)).fetchone() is not None
@@ -196,7 +195,8 @@ class Library:
     def delete_engine(self, identity: str) -> None:
         with self.transaction() as db:
             if self.engine_needed(identity):
-                raise ValueError("This engine is selected or is needed by an unfinished scan.")
+                raise ValueError("An unfinished scan still needs this engine.")
+            db.execute("DELETE FROM settings WHERE name='active_engine' AND value=?", (encode(identity),))
             db.execute("DELETE FROM engines WHERE id=?", (identity,))
 
     def create_scan(self, name: str, sources: list[Source], filters: GameFilter,

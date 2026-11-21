@@ -2,21 +2,23 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 from datetime import date, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+import chess
+from PySide6.QtCore import QDate, Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
+    QCheckBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
     QHBoxLayout, QInputDialog, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
     QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget,
 )
 
-from PySide6.QtCore import Qt
 
 from ..acquisition import api_sources, archive_months, archive_sources
-from ..maia import CHECKPOINT_NAME, CHECKPOINT_SHA, CHECKPOINT_SIZE, download_checkpoint
+from ..maia import (CHECKPOINT_NAME, CHECKPOINT_SHA, CHECKPOINT_SIZE, MaiaProcess,
+                    download_checkpoint, install_cpu_runtime, runtime_installed)
+
 from ..model import SPEEDS, GameFilter, SearchSettings, Source, file_digest
 from ..network import Network
 from .theme import Task, button, combo, error, label, spin
@@ -127,6 +129,16 @@ class ScannerView(QWidget):
         form.addRow("First month", self.first_month)
         form.addRow("Last month", self.last_month)
         form.addRow(button("Browse available months", self._months))
+        self.single_day = QCheckBox("Scan a single UTC day")
+        self.archive_day = QDateEdit(QDate.currentDate().addMonths(-1))
+        self.archive_day.setDisplayFormat("yyyy-MM-dd")
+        self.archive_day.setCalendarPopup(True)
+        self.archive_day.setEnabled(False)
+        form.addRow(self.single_day)
+        form.addRow("UTC day", self.archive_day)
+        self.single_day.toggled.connect(self.archive_day.setEnabled)
+        self.single_day.toggled.connect(lambda checked: self.first_month.setEnabled(not checked))
+        self.single_day.toggled.connect(lambda checked: self.last_month.setEnabled(not checked))
         self.cache_mode = QCheckBox("Download to managed archive cache")
         form.addRow(self.cache_mode)
         self.cache_location = self._field("Cache directory", str(self.root / "cache"))
@@ -134,13 +146,13 @@ class ScannerView(QWidget):
         browse.addWidget(self.cache_location, 1)
         browse.addWidget(button("Browse…", self._pick_cache))
         form.addRow("Cache directory", browse)
-        self.cache_limit = spin(100, 1, 8192)
-        self.cache_limit.setSuffix(" GiB")
+        self.cache_limit = spin(int(self.library.setting("archive_cache_gb", 1)), 1, 8192)
+        self.cache_limit.setSuffix(" GB")
         form.addRow("Cache limit", self.cache_limit)
         self.delete_cache = QCheckBox("Delete this archive after intake")
         form.addRow(self.delete_cache)
         form.addRow(label("Streaming transfers compressed data without keeping an archive on disk. "
-                          "After interruption, the scanner may replay earlier records.", "muted", wrap=True))
+                          "A day filter still reads the monthly stream. After interruption, the scanner may replay earlier records.", "muted", wrap=True))
         self.cache_mode.toggled.connect(self._toggle_cache)
         self._toggle_cache(False)
 
@@ -314,7 +326,7 @@ class ScannerView(QWidget):
             error(self, "Search settings", str(exc))
 
     def _toggle_cache(self, checked):
-        for widget in (self.cache_location, self.cache_limit, self.delete_cache):
+        for widget in (self.cache_location, self.delete_cache):
             widget.setEnabled(checked)
 
     def _pick_cache(self):
@@ -400,7 +412,14 @@ class ScannerView(QWidget):
             if source == "archive":
                 first, last = self.first_month.text().strip(), self.last_month.text().strip()
                 cache = Path(self.cache_location.text()) if self.cache_mode.isChecked() else None
-                size = self.cache_limit.value() * 1024 ** 3
+                day = self.archive_day.date().toString("yyyy-MM-dd") if self.single_day.isChecked() else ""
+                if day:
+                    if (filters.since and day < filters.since) or (filters.until and day > filters.until):
+                        raise ValueError("The selected archive day is outside the game date filters.")
+                    first = last = day[:7]
+                    filters = replace(filters, since=day, until=day)
+                self.library.set_setting("archive_cache_gb", self.cache_limit.value())
+                size = self.cache_limit.value() * 1000 ** 3
                 delete = self.delete_cache.isChecked()
 
                 def planned(_):
@@ -411,7 +430,7 @@ class ScannerView(QWidget):
                         network.close()
 
                 self.info.emit("Checking Lichess's archive list and official checksums…")
-                self._launch(planned, lambda value: create(value, first if first == last else f"{first}–{last}"), "Start archive scan")
+                self._launch(planned, lambda value: create(value, day or (first if first == last else f"{first}–{last}")), "Start archive scan")
             elif source == "api":
                 mode, value = self.api_mode.currentData(), self.api_value.text().strip()
                 sources = api_sources(mode, value, filters, vs=self.api_opponent.text(),
@@ -465,15 +484,29 @@ class ScannerView(QWidget):
     def _load_maia(self, fn):
         if self.model_task and self.model_task.isRunning():
             return
-        task = self.model_task = Task(fn, self)
+        def prepare(task):
+            path = fn(task)
+            if not runtime_installed():
+                install_cpu_runtime(task.message.emit)
+            task.message.emit("Checking local Maia inference…")
+            worker = MaiaProcess(path)
+            try:
+                worker.predict(chess.Board(), 1800, 1800)
+            finally:
+                worker.close()
+            return path
+
+        task = self.model_task = Task(prepare, self)
+        task.message.connect(self.model_status.setText)
         self.model_status.setText("Preparing Maia checkpoint…")
         task.transfer.connect(lambda n, total: self.model_status.setText(f"Downloading Maia · {bytes_text(n)} / {bytes_text(total)}"))
         task.failed.connect(lambda detail: error(self, "Maia setup", detail))
 
         def set_path(path):
             self.library.set_setting("maia_checkpoint", str(path))
+            self.runner.maia_installed = True
             self.runner.set_checkpoint(path)
-            self.info.emit("Verified the official Maia 3 79M checkpoint.")
+            self.info.emit("Maia 3 is ready. Queued predictions will run when the scan is active.")
 
         def done():
             self.model_task = None
@@ -505,7 +538,7 @@ class ScannerView(QWidget):
             elif self.runner.maia_installed:
                 message = "Download the official 301 MiB checkpoint to run queued predictions."
             else:
-                message = "The Maia runtime is missing. Install the optional CPU dependencies using the Windows setup instructions."
+                message = "Download or choose the official checkpoint to set up the Maia CPU runtime."
             self.model_status.setText(message)
         self.download_model.setEnabled(self.model_task is None)
         self.choose_model.setEnabled(self.model_task is None)

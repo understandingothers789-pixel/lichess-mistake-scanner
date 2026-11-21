@@ -416,7 +416,7 @@ class EngineManager:
 
     def remove(self, profile: dict) -> None:
         if self.library.engine_needed(profile["id"]):
-            raise ValueError("Select a different engine and finish any scans that still need this profile.")
+            raise ValueError("Finish the Stockfish work in any scans that still use this profile before removing it.")
         directory = profile.get("managed_directory")
         if directory:
             path = Path(directory)

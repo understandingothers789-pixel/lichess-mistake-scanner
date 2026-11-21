@@ -65,7 +65,7 @@ class EngineDialog(QDialog):
         controls = QHBoxLayout()
         self.active = button("Use selected engine", self._activate)
         self.validate = button("Validate UCI", self._validate)
-        self.remove = button("Remove unused profile", self._remove)
+        self.remove = button("Remove engine…", self._remove)
         self.show_log = button("Show activity log", self._toggle_log)
         self.show_log.setCheckable(True)
         for widget in (self.active, self.validate, self.remove, self.show_log):
@@ -122,7 +122,6 @@ class EngineDialog(QDialog):
             return
         active = profile["id"] == self.library.setting("active_engine")
         self.active.setEnabled(not busy and not active)
-        self.remove.setEnabled(not busy and not active)
         values = [
             ("Profile", profile["name"]), ("UCI version", profile["version"]),
             ("Commit date", profile.get("commit_date")), ("Commit SHA", profile.get("commit")),
@@ -280,10 +279,16 @@ class EngineDialog(QDialog):
         if profile is None:
             return
         question = "Remove this profile and its managed installation?" if profile.get("managed_directory") else "Remove this profile from Second Look?"
-        if QMessageBox.question(self, "Remove unused engine", question) != QMessageBox.StandardButton.Yes:
+        if profile["id"] == self.library.setting("active_engine"):
+            question += "\n\nThis is the active engine. Select or download a replacement before starting a new scan."
+        if QMessageBox.question(self, "Remove engine", question) != QMessageBox.StandardButton.Yes:
             return
-        self._start("Removing unused engine…", lambda _: self.manager.remove(profile),
-                    lambda _: (self._refresh(), self.status.setText("Engine profile removed.")), maintenance=True)
+        def removed(_):
+            self._refresh()
+            self.status.setText("Engine profile removed.")
+            self.changed.emit()
+
+        self._start("Removing engine…", lambda _: self.manager.remove(profile), removed, maintenance=True)
 
     def _build(self):
         form = QDialog(self)
