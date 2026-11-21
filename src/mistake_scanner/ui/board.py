@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QInputDialog, QSizePolicy, QToolTip, QWidget
 
 from ..model import Score
 from .theme import ACCENT, AMBER, BG, BORDER, MINT, MUTED, SURFACE
+from .wheel import MoveWheel
 
 LIGHT = QColor("#f0d9b5")
 DARK = QColor("#b58863")
@@ -30,10 +31,12 @@ def clock_text(seconds: float | None) -> str:
 
 class BoardWidget(QWidget):
     move_played = Signal(str)
+    steps_requested = Signal(int)
 
     def __init__(self, parent=None, *, miniature=False):
         super().__init__(parent)
         self.miniature = miniature
+        self.move_wheel = MoveWheel()
         self.clocks: dict[chess.Color, float | None] | None = None
         self.board = chess.Board()
         self.flip = False
@@ -196,6 +199,19 @@ class BoardWidget(QWidget):
         if score:
             value_text = f"M{score.mate}" if score.mate is not None else f"{abs(score.cp or 0)/100:.1f}"
         painter.drawText(bottom.adjusted(0, 0, 0, -5), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, value_text)
+
+    def wheelEvent(self, event):
+        steps = None if self.miniature else self.move_wheel.consume(event)
+        if steps is None:
+            event.ignore()
+            return
+        if steps:
+            self.steps_requested.emit(steps)
+        event.accept()
+
+    def leaveEvent(self, event):
+        self.move_wheel.reset()
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event):
         square = self._at(event.position())

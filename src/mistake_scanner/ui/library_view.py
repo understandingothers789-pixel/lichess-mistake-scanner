@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QHBoxLayout, QHeaderView, QLineEdit, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from ..model import board_at
+from ..model import SPEEDS, board_at
 from .review import NAMES, _clock, _prob, export_ui
 from .theme import ACCENT, AMBER, MUTED, Task, button, cell, combo, label, table
 
@@ -47,6 +47,18 @@ class LibraryView(QWidget):
         heading.addWidget(button("Export selected", lambda: self._export(False)))
         heading.addWidget(button("Export filtered collection", lambda: self._export(True)))
         outer.addLayout(heading)
+        time_filters = QHBoxLayout()
+        self.speed_filter = combo([("Any time category", ""), *((speed.capitalize(), speed) for speed in SPEEDS)])
+        self.speed_filter.setAccessibleName("Time category filter")
+        self.time_filter = QLineEdit()
+        self.time_filter.setPlaceholderText("Exact time control, e.g. 900+10")
+        self.time_filter.setAccessibleName("Exact time control filter")
+        self.time_filter.setMaximumWidth(250)
+        time_filters.addWidget(label("Time control", "label"))
+        time_filters.addWidget(self.speed_filter)
+        time_filters.addWidget(self.time_filter)
+        time_filters.addStretch()
+        outer.addLayout(time_filters)
         self.tabs = QTabWidget()
         self.discoveries = QWidget()
         self.games = QWidget()
@@ -121,9 +133,9 @@ class LibraryView(QWidget):
         self.debounce.setSingleShot(True)
         self.debounce.setInterval(160)
         self.debounce.timeout.connect(self._changed)
-        for field in (self.search, self.game_search, self.eco):
+        for field in (self.search, self.game_search, self.eco, self.time_filter):
             field.textChanged.connect(lambda _: self.debounce.start())
-        for field in (self.sort, self.review, self.clock, self.game_sort):
+        for field in (self.sort, self.review, self.clock, self.game_sort, self.speed_filter):
             field.currentIndexChanged.connect(self._changed)
         for field in (self.pending, self.bookmarks):
             field.toggled.connect(self._changed)
@@ -138,13 +150,16 @@ class LibraryView(QWidget):
         self.refresh(force=True)
 
     def _params(self):
+        time_filters = {"speed": self.speed_filter.currentData(), "time_control": self.time_filter.text().strip()}
         if self.tabs.currentIndex() == 1:
             return self.library.game_page, {
+                **time_filters,
                 "query": self.game_search.text().strip(), "bookmarks": self.bookmarks.isChecked(),
                 "sort": self.game_sort.currentData(),
             }
         upper, lower = self.clock.currentData()
         return self.library.discovery_page, {
+            **time_filters,
             "query": self.search.text().strip(), "sort": self.sort.currentData(), "review": self.review.currentData(),
             "clock": upper, "clock_min": lower, "eco": self.eco.text().strip(), "pending": self.pending.isChecked(),
         }

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QFrame, QVBoxLayout
 
 from .board import BoardWidget
 from .theme import label
+from .wheel import MoveWheel
 
 
 class VariationPreview(QFrame):
@@ -31,8 +32,7 @@ class VariationPreview(QFrame):
         layout.addWidget(self.hint)
         self.row = None
         self.step = 0
-        self.remainder = 0
-        self.threshold = 0
+        self.wheel = MoveWheel()
         self.root = chess.Board()
         self.moves = ()
         self.hide()
@@ -40,26 +40,19 @@ class VariationPreview(QFrame):
     def show_line(self, row, root, moves, flipped, cursor):
         if self.row != row:
             self.row, self.root, self.moves = row, root, moves
-            self.step, self.remainder, self.threshold = 1, 0, 0
+            self.step = 1
+            self.wheel.reset()
             self.board.flip = flipped
             self._show_step()
         self.move_near(cursor)
         self.show()
 
     def scroll(self, event) -> bool:
-        delta = event.pixelDelta().y()
-        threshold = 40 if delta else 120
-        delta = delta or event.angleDelta().y()
-        if not delta or event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+        steps = self.wheel.consume(event)
+        if steps is None:
             return False
-        if threshold != self.threshold or delta * self.remainder < 0:
-            self.remainder = 0
-        self.threshold = threshold
-        self.remainder += delta
-        steps = int(self.remainder / threshold)
-        self.remainder -= steps * threshold
         if steps:
-            self.step = max(0, min(len(self.moves), self.step - steps))
+            self.step = max(0, min(len(self.moves), self.step + steps))
             self._show_step()
         return True
 

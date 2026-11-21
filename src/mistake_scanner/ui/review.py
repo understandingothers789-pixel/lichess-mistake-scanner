@@ -152,6 +152,7 @@ class Review(QWidget):
         self.bottom_player = label("♚  White", "label")
         self.board = BoardWidget()
         self.board.move_played.connect(self._scratch)
+        self.board.steps_requested.connect(self.advance)
         board_layout.addWidget(self.top_player)
         board_layout.addWidget(self.board, 1)
         lower = QHBoxLayout()

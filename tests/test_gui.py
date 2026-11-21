@@ -118,6 +118,14 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         QTest.mouseClick(review.live_button, Qt.MouseButton.LeftButton)
         assert review.live_future is None
 
+        for delta, expected_ply in ((-120, 3), (120, 2)):
+            point = board.rect().center()
+            wheel = QWheelEvent(QPointF(point), QPointF(board.mapToGlobal(point)), QPoint(), QPoint(0, delta),
+                                Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                                Qt.ScrollPhase.NoScrollPhase, False)
+            QApplication.sendEvent(board, wheel)
+            assert review.ply == expected_ply
+
         window.engines()
         assert window.dialog.table.rowCount() == 1
         assert fake_profile["commit"] in window.dialog.details.toPlainText()
@@ -131,6 +139,24 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         original = window.library.game(found["scan_game"])
         assert {row["game_id"] for row in window.library.game_page()} == {original["id"]}
         assert len(window.library.game_page()) == 2
+        browser = window.browser
+        window.show_page(1)
+        browser.tabs.setCurrentIndex(1)
+        browser.speed_filter.setCurrentIndex(browser.speed_filter.findData("classical"))
+        pump(app, lambda: browser.fetch is None)
+        assert not browser.rows
+        browser.speed_filter.setCurrentIndex(browser.speed_filter.findData("rapid"))
+        pump(app, lambda: browser.fetch is None and len(browser.rows) == 2)
+        browser.time_filter.setText("900+10")
+        browser._changed()
+        pump(app, lambda: browser.fetch is None)
+        assert not browser.rows
+        browser.tabs.setCurrentIndex(0)
+        browser.time_filter.setText("600+5")
+        browser._changed()
+        pump(app, lambda: browser.fetch is None and bool(browser.rows))
+        assert {row["speed"] for row in browser.rows} == {"rapid"}
+
     finally:
         window.close()
         pump(app, lambda: not window.isVisible())

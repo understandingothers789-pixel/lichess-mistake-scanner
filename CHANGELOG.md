@@ -1,5 +1,10 @@
 # What changed
 
+## v0.1.10
+
+- Scroll over the main board to step forward or backward through the game or current variation.
+- Filter Games and Discoveries in the Library by time category or exact time control.
+
 ## v0.1.9
 
 - Refined the interface with slate panels, teal controls, lavender Maia values and a more compact toolbar inspired by Nocturne.

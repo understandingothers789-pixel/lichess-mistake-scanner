@@ -428,7 +428,7 @@ class Library:
         with self.transaction() as db:
             db.execute(f"UPDATE {table} SET {columns} WHERE id=?", (*values.values(), identity))
 
-    def game_page(self, query="", offset=0, limit=100, *, bookmarks=False, sort="recent") -> list[dict]:
+    def game_page(self, query="", offset=0, limit=100, *, bookmarks=False, sort="recent", speed="", time_control="") -> list[dict]:
         order = {"recent": "scan_games.id DESC", "date": "games.day DESC", "white": "games.white COLLATE NOCASE",
                  "black": "games.black COLLATE NOCASE", "rating": "games.white_elo DESC, games.black_elo DESC",
                  "speed": "games.speed", "opening": "games.opening COLLATE NOCASE"}.get(sort, "scan_games.id DESC")
@@ -444,6 +444,12 @@ class Library:
         if query:
             sql += " AND (LOWER(games.white) LIKE ? OR LOWER(games.black) LIKE ? OR LOWER(games.opening) LIKE ?)"
             args.extend([f"%{query.lower()}%"] * 3)
+        if speed:
+            sql += " AND games.speed=?"
+            args.append(speed)
+        if time_control:
+            sql += " AND games.time_control=?"
+            args.append(time_control)
         if bookmarks:
             sql += " AND scan_games.bookmarked=1"
         rows = self.connection().execute(sql + f" ORDER BY {order},scan_games.id DESC LIMIT ? OFFSET ?",
@@ -461,7 +467,7 @@ class Library:
 
     def discovery_page(
         self, query="", offset=0, limit=100, *, sort="probability", pending=False,
-        review="all", clock: float | None = None, clock_min: float | None = None, eco="",
+        review="all", clock: float | None = None, clock_min: float | None = None, eco="", speed="", time_control="",
     ) -> list[dict]:
         order = {
             "probability": "mistakes.probability DESC, (mistakes.loss_cp IS NULL) DESC,mistakes.loss_cp DESC",
@@ -489,6 +495,12 @@ class Library:
         if query:
             sql += " AND (LOWER(games.white) LIKE ? OR LOWER(games.black) LIKE ? OR LOWER(games.opening) LIKE ?)"
             args.extend([f"%{query.lower()}%"] * 3)
+        if speed:
+            sql += " AND games.speed=?"
+            args.append(speed)
+        if time_control:
+            sql += " AND games.time_control=?"
+            args.append(time_control)
         sql += " AND mistakes.state!='rejected'" if pending else " AND mistakes.state IN ('verified','awaiting_maia','complete')"
         if review == "bookmarked":
             sql += " AND mistakes.bookmarked=1"
