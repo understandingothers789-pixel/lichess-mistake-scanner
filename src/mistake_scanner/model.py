@@ -43,7 +43,7 @@ class SearchSettings:
     decisive_cp: int = 300
     decisive_plies: int = 6
     acceptable_cp: int = 50
-    first_move: int = 8
+    first_move: int = 1
     affinity: bool = False
     below_normal: bool = True
 

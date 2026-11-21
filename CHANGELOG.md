@@ -1,5 +1,9 @@
 # What changed
 
+## v0.1.7
+
+- Mistake detection starts at move 1 by default for new scans and reanalysis.
+
 ## v0.1.6
 
 - Windows and Python ZIPs extract into versioned folders.

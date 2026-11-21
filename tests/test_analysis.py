@@ -83,7 +83,7 @@ def test_discovery_restricts_root_for_black_when_provisional_loss_is_enough():
             return [Variation((), Score(mate=0, winner=1), 0)]
         return [Variation((game["moves"][ply],), Score(cp=25), depth)]
 
-    _, candidates, _ = discover(game, SearchSettings(first_move=1), search)
+    _, candidates, _ = discover(game, SearchSettings(), search)
     assert [item["ply"] for item in candidates] == [6]
     assert (5, 12, "g8f6") in calls
     assert candidates[0]["reason"] == "Allowed forced mate"

@@ -61,7 +61,7 @@ Pause stops new work from being scheduled and lets active analysis finish. On re
 
 Discovery defaults to eight separate single-threaded Stockfish processes with 32 MiB of Hash each. Discovery and verification share this worker limit. Workers run below normal priority. Optional affinity uses physical-core topology when the platform exposes it. Discovery uses depth 12 and switches to depth 4 after the same side has been decisively ahead for six consecutive plies. A shallow collapse triggers a deeper search. The fast mode can miss tactics.
 
-Moves from move 8 onward are eligible by default. The scanner looks for at least 0.50 pawns of loss from the mover's perspective. It excludes changes where both moves retain the same decisive outcome (at least 3.0 pawns for the same side). It handles mate changes separately. The discovery pass uses consecutive positions to screen moves and a restricted root to check the actual move when necessary.
+Mistake detection starts at move 1 by default. The scanner looks for at least 0.50 pawns of loss from the mover's perspective. It excludes changes where both moves retain the same decisive outcome (at least 3.0 pawns for the same side). It handles mate changes separately. The discovery pass uses consecutive positions to screen moves and a restricted root to check the actual move when necessary.
 
 Verification defaults to depth 20 and MultiPV 5 on both sides of a candidate. It checks the actual move even when it falls outside those lines. It also checks the opponent's actual response for a missed punishment and links verified follow-ups in the game. An apparent only move is a finding at the displayed search depth.
 
