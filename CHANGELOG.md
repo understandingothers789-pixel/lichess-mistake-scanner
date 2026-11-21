@@ -1,5 +1,11 @@
 # What changed
 
+## v0.1.3
+
+- Reanalyze a saved game directly with the currently selected Stockfish engine and retain both results.
+- Saved scans retain their configured Stockfish worker limit alongside the global cap.
+- Live integration tests now cover exports by game ID as well as game URL and username.
+
 ## v0.1.2
 
 - The Windows download includes the Maia 3 CPU runtime. Download the verified model once from Scanner to enable predictions.
