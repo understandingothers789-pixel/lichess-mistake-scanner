@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QStackedWi
 
 from .database import Library
 from .maia import CHECKPOINT_NAME
-from .model import APP_NAME, SearchSettings
+from .model import APP_NAME, GameFilter, SearchSettings, Source
 from .runner import Runner
 from .ui.engine_view import EngineDialog
 from .ui.library_view import LibraryView
@@ -74,6 +74,7 @@ class Window(QMainWindow):
         self.review.open_library.connect(lambda: self.show_page(1))
         self.review.open_scanner.connect(lambda: self.show_page(2))
         self.browser.opened.connect(self.open_game)
+        self.review.reanalyze.connect(self.reanalyze_game)
         self.scanner.request_engines.connect(self.engines)
 
         menu = self.menuBar().addMenu("View")
@@ -134,6 +135,20 @@ class Window(QMainWindow):
         self.review.load(scan_game, moment)
         self.library.set_setting("last_game", scan_game)
         self.show_page(0)
+
+    def reanalyze_game(self, scan_game: int):
+        profile = self.library.engine(self.library.setting("active_engine"))
+        if profile is None:
+            error(self, "Reanalyze game", "Select an engine in Engine Manager first.")
+            return
+        game = self.library.game(scan_game)
+        name = f"Reanalysis · {game['white'] or 'White'} vs {game['black'] or 'Black'}"
+        scan = self.library.create_scan(name, [Source("library", str(scan_game))], GameFilter(),
+                                        self.scanner.rules, profile, 1)
+        self.runner.wakeup.set()
+        self.show_page(2)
+        self.scanner.active_scan.setCurrentIndex(self.scanner.active_scan.findData(scan))
+        self.show_status(f"Queued reanalysis with {profile['name']}. Both results are kept in the library.")
 
     def refresh_engine(self):
         selected = self.library.engine(self.library.setting("active_engine"))

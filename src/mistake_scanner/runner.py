@@ -331,8 +331,14 @@ class Runner:
             check(True)
             for attempt in range(4):
                 try:
-                    read(start)
-                    delete_cached(source)
+                    if source.kind == "library":
+                        game = self.library.game(int(source.locator))
+                        if game is None:
+                            raise ValueError("The saved source game no longer exists.")
+                        self.library.import_game(source_id, scan_id, game, 1)
+                    else:
+                        read(start)
+                        delete_cached(source)
                     self.library.source_state(source_id, "done")
                     break
                 except (httpx.TransportError, zstandard.ZstdError):

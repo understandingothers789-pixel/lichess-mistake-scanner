@@ -91,6 +91,13 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         window.dialog.accept()
         app.processEvents()
         assert window.dialog is None
+        QTest.mouseClick(review.reanalysis_button, Qt.MouseButton.LeftButton)
+        assert window.pages.currentIndex() == 2
+        scan = window.scanner.active_scan.currentData()
+        pump(app, lambda: window.library.scan(scan)["verified"] == 1)
+        original = window.library.game(found["scan_game"])
+        assert {row["game_id"] for row in window.library.game_page()} == {original["id"]}
+        assert len(window.library.game_page()) == 2
     finally:
         window.close()
         pump(app, lambda: not window.isVisible())

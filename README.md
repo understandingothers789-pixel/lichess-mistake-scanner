@@ -36,6 +36,7 @@ Pause stops new work from being scheduled and lets active analysis finish. On re
 
 ## Review and exports
 
+- **Reanalyze** queues a new scan of the saved game with the selected engine and current settings. Both results remain in the library.
 - The **game score** opens any played move and includes variations in the original PGN. Click the **evaluation graph** to seek through the game, or use **Previous/Next Moment** to jump between findings.
 - **Before move** and **After move** show stored Stockfish lines, search depths, acceptable moves, and Maia probabilities. Hover for a board preview and the complete continuation. Click a line and use Left/Right to step through it. **Main line** returns to the result.
 - Click or drag a piece for a legal side variation. Right-drag draws an arrow. The evaluation bar and graph use White's perspective. The **View** menu controls dockable panels.

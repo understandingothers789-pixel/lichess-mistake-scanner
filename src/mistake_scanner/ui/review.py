@@ -67,6 +67,7 @@ def _prob(value) -> str:
 
 
 class Review(QWidget):
+    reanalyze = Signal(int)
     open_library = Signal()
     open_scanner = Signal()
     info = Signal(str)
@@ -102,10 +103,12 @@ class Review(QWidget):
         titles.addWidget(self.context)
         header.addLayout(titles, 1)
         self.open_source = button("Lichess game ↗", self._open_source)
+        self.reanalysis_button = button("Reanalyze", lambda: self.reanalyze.emit(self.game["scan_game"]),
+                                        tip="Analyze this game as a new scan with the selected engine")
         self.export_button = button("Export", self._export)
         self.library_button = button("Open library", self.open_library.emit)
         self.scan_button = button("Start a scan", self.open_scanner.emit, role="primary")
-        for control in (self.open_source, self.export_button, self.library_button, self.scan_button):
+        for control in (self.open_source, self.reanalysis_button, self.export_button, self.library_button, self.scan_button):
             header.addWidget(control)
         outer.addLayout(header)
 
@@ -463,6 +466,7 @@ class Review(QWidget):
         self.next_moment.setEnabled(bool(self.moments))
         self.return_line.setVisible(bool(self.branch))
         self.open_source.setVisible(bool(self.game and (self.game["site"] or "").startswith("https://lichess.org/")))
+        self.reanalysis_button.setVisible(bool(self.game))
         self.export_button.setVisible(bool(self.game))
         self.library_button.setVisible(self.game is None)
         self.scan_button.setVisible(self.game is None)

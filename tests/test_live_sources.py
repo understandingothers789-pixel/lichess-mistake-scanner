@@ -20,6 +20,10 @@ def test_live_lichess_archive_game_and_user_export():
         with open_pgn(source, network) as text:
             _, response, _ = next(records(text, GameFilter(), remote=True))
         assert response["moves"] == first["moves"] and response["id"] == first["id"]
+        source = api_sources("ids", first["lichess_id"], GameFilter())[0]
+        with open_pgn(source, network) as text:
+            _, by_id, _ = next(records(text, GameFilter(), remote=True))
+        assert by_id["id"] == first["id"]
         source = api_sources("user", "DrNykterstein", GameFilter(rated=True, speeds=("blitz",)), max=1)[0]
         with open_pgn(source, network) as text:
             _, response, reason = next(records(text, GameFilter(), remote=True))

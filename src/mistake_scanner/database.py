@@ -279,6 +279,10 @@ class Library:
             job = db.execute("""
                 SELECT jobs.* FROM jobs JOIN scans ON scans.id=jobs.scan_id
                 WHERE jobs.stage=? AND jobs.state='pending' AND scans.state='running'
+                AND (jobs.stage='maia' OR (
+                    SELECT COUNT(*) FROM jobs AS active
+                    WHERE active.scan_id=jobs.scan_id AND active.state='running' AND active.stage!='maia'
+                ) < json_extract(scans.rules, '$.workers'))
                 ORDER BY jobs.id LIMIT 1
             """, (stage,)).fetchone()
             if job is None:
