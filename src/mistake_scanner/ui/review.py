@@ -9,7 +9,7 @@ from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
-    QDialog, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog,
+    QAbstractItemView, QDialog, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QMainWindow, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -17,7 +17,7 @@ from ..exports import san_line, write_export
 from ..model import Score, SearchSettings, Variation, board_at, position_key
 from .board import BoardWidget, EvalGraph
 from .preview import VariationPreview
-from .theme import ACCENT, AMBER, MUTED, Task, button, cell, error, label, score_color, table
+from .theme import ACCENT, AMBER, MAIA, MUTED, Task, button, cell, error, label, score_color, table
 
 FORMATS = {
     "Annotated PGN": ("pgn", "pgn"), "Original PGN": ("original", "pgn"),
@@ -116,7 +116,7 @@ class Review(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 14, 18, 12)
-        outer.setSpacing(11)
+        outer.setSpacing(8)
         header = QHBoxLayout()
         titles = QVBoxLayout()
         titles.setSpacing(2)
@@ -206,10 +206,15 @@ class Review(QWidget):
         phase.addStretch()
         self.position_label = label("", "label")
         phase.addWidget(self.position_label)
+        self.position_eval = label("—", "eval")
+        self.position_eval.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.position_eval.setMinimumWidth(65)
+        self.position_eval.setToolTip("Evaluation from White's perspective")
+        phase.addWidget(self.position_eval)
         analysis_layout.addLayout(phase)
         self.line_table = table(["Move", "Eval", "Continuation", "Depth", "Maia"])
         self.line_table.horizontalHeader().setStretchLastSection(False)
-        for index, width in enumerate((78, 61, 190, 54, 68)):
+        for index, width in enumerate((64, 60, 190, 51, 62)):
             self.line_table.setColumnWidth(index, width)
         self.line_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.line_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
@@ -220,7 +225,7 @@ class Review(QWidget):
         self.line_table.setMinimumHeight(180)
         analysis_layout.addWidget(self.line_table, 1)
         self.summary = label("Open a discovery to see its full Stockfish variations.", "muted", wrap=True)
-        self.maia = label("", "label", wrap=True)
+        self.maia = label("", "maia", wrap=True)
         analysis_layout.addWidget(self.summary)
         analysis_layout.addWidget(self.maia)
         options = QHBoxLayout()
@@ -239,12 +244,15 @@ class Review(QWidget):
         score_layout.setSpacing(4)
         self.moves = QTreeWidget()
         self.moves.setAccessibleName("Annotated PGN move list")
-        self.moves.setHeaderLabels(["Turn", "Move", "Eval", "Depth", "Moment"])
+        self.moves.setHeaderLabels(["#", "White", "Eval", "Black", "Eval"])
         self.moves.setAlternatingRowColors(True)
-        self.moves.setColumnWidth(0, 75)
-        self.moves.setColumnWidth(1, 97)
-        self.moves.setColumnWidth(2, 60)
-        self.moves.setColumnWidth(3, 55)
+        self.moves.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        for col, width in ((0, 56), (2, 62), (4, 62)):
+            self.moves.setColumnWidth(col, width)
+        score_header = self.moves.header()
+        score_header.setStretchLastSection(False)
+        for col in (1, 3):
+            score_header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
         self.moves.setIndentation(11)
         self.moves.setUniformRowHeights(True)
         self.moves.setMinimumHeight(110)
@@ -283,7 +291,7 @@ class Review(QWidget):
         self.workspace.splitDockWidget(self.score_dock, self.moment_dock, Qt.Orientation.Vertical)
         self.workspace.resizeDocks([self.engine_dock], [634], Qt.Orientation.Horizontal)
         self.workspace.resizeDocks([self.engine_dock, self.score_dock, self.moment_dock], [324, 239, 150], Qt.Orientation.Vertical)
-        self.workspace.resizeDocks([self.chart_dock], [145], Qt.Orientation.Vertical)
+        self.workspace.resizeDocks([self.chart_dock], [108], Qt.Orientation.Vertical)
         self.reset_state = self.workspace.saveState()
         saved = self.library.setting("analysis_layout")
         if saved:
@@ -369,27 +377,40 @@ class Review(QWidget):
         moments = {m["ply"]: m for m in self.moments}
         root = QTreeWidgetItem(["", "Start", "", "", ""])
         self.moves.addTopLevelItem(root)
-        self.score_items[0] = root
-        root.setData(0, Qt.ItemDataRole.UserRole, (0, ()))
+        self.score_items[0] = root, 1
+        root.setData(1, Qt.ItemDataRole.UserRole, (0, ()))
 
         def branch(node, item, anchor, pv):
             board = node.parent.board()
+            col = 1 if board.turn else 3
             score = node.eval()
-            row = QTreeWidgetItem([f"{board.fullmove_number}{'.' if board.turn else '…'}", node.san(),
-                                   Score.from_uci(score).display() if score else "",
-                                   str(node.eval_depth() or ""), "PGN variation"])
+            row = QTreeWidgetItem([f"{board.fullmove_number}." if board.turn else f"{board.fullmove_number}…"])
+            row.setText(col, node.san())
+            row.setForeground(col, QColor(MUTED))
+            if score:
+                evaluation = Score.from_uci(score)
+                row.setText(col + 1, evaluation.display())
+                row.setForeground(col + 1, QColor(score_color(evaluation)))
             item.addChild(row)
             line = (*pv, node.move.uci())
-            row.setData(0, Qt.ItemDataRole.UserRole, (anchor, line))
+            for column in (col, col + 1):
+                row.setData(column, Qt.ItemDataRole.UserRole, (anchor, line))
+                row.setToolTip(column, f"PGN variation · d{node.eval_depth()}" if node.eval_depth() else "PGN variation")
             for child in node.variations:
                 branch(child, row, anchor, line)
 
+        row = None
         for ply, node in enumerate(game.mainline(), 1):
             move_board = node.parent.board()
+            col = 1 if move_board.turn else 3
+            if row is None or move_board.turn:
+                row = QTreeWidgetItem([f"{move_board.fullmove_number}."])
+                self.moves.addTopLevelItem(row)
             deep = self.position_info.get(ply)
             discovery = self.evaluations.get(ply)
             score = deep.score if deep else Score(**discovery["score"]) if discovery else None
             depth = deep.depth if deep else discovery["depth"] if discovery else None
+            depth_label = (f"d{depth}" if depth else "Final") if depth is not None else ""
             moment = moments.get(ply)
             state = ""
             if moment:
@@ -397,24 +418,17 @@ class Review(QWidget):
                     ply - 1 in moments and moments[ply - 1]["detail"]
                     and (moments[ply - 1]["detail"].get("punishment") or {}).get("missed")
                 ) else "Mistake"
-            row = QTreeWidgetItem([
-                f"{move_board.fullmove_number}{'.' if move_board.turn else '…'}", node.san(),
-                score.display() if score else "—", (f"d{depth}" if depth else "Final") if depth is not None else "—", state,
-            ])
-            if score:
-                row.setForeground(2, QColor(score_color(score)))
-            if depth == self.fast_depth:
-                row.setForeground(3, QColor(MUTED))
-            if deep:
-                row.setForeground(3, QColor(ACCENT))
-            if moment:
-                row.setForeground(4, QColor(AMBER))
-            self.moves.addTopLevelItem(row)
-            self.score_items[ply] = row
-            row.setData(0, Qt.ItemDataRole.UserRole, (ply, ()))
+                row.setForeground(col, QColor(AMBER))
+            row.setText(col, f"{node.san()}  {'?!' if state == 'Candidate' else '?' if state else ''}".rstrip())
+            row.setText(col + 1, score.display() if score else "—")
+            row.setForeground(col + 1, QColor(score_color(score) if score else MUTED))
+            for column in (col, col + 1):
+                row.setData(column, Qt.ItemDataRole.UserRole, (ply, ()))
+                row.setToolTip(column, " · ".join(part for part in (node.san(), depth_label, state) if part))
+            self.score_items[ply] = row, col
             for alternative in node.parent.variations[1:]:
-                branch(alternative, self.score_items[ply - 1], ply - 1, ())
-        self.moves.setCurrentItem(self.score_items.get(self.ply, root))
+                branch(alternative, self.score_items[ply - 1][0], ply - 1, ())
+        self.moves.setCurrentItem(*self.score_items.get(self.ply, (root, 1)))
 
     def _moment_rows(self):
         self.moment_table.setRowCount(len(self.moments))
@@ -489,6 +503,7 @@ class Review(QWidget):
         if self.game:
             clocks = ({chess.WHITE: None, chess.BLACK: None} if self.branch and self.step
                       else recorded_clocks(self.game, self.ply))
+        self.position_eval.setText(score.display() if score else "—")
         self.board.set_position(board, score, hint, clocks=clocks)
         self.graph.set_ply(self.ply)
         self.all_policy.setEnabled(policy is not None and bool(policy))
@@ -532,7 +547,7 @@ class Review(QWidget):
             self.line_table.setItem(i, 1, cell(line.score.display(), score_color(line.score), tip))
             self.line_table.setItem(i, 2, cell(continuation, None, tip))
             self.line_table.setItem(i, 3, cell(f"d{line.depth}", MUTED, tip))
-            self.line_table.setItem(i, 4, cell(_prob(None if policy is None else policy.get(move)), ACCENT, tip))
+            self.line_table.setItem(i, 4, cell(_prob(None if policy is None else policy.get(move)), MAIA, tip))
 
     def _toggle_live(self, enabled):
         if not enabled:
@@ -628,7 +643,7 @@ class Review(QWidget):
         self.branch, self.step = [], 0
         self.library.review(self.game["scan_game"], game=True, cursor=self.ply, cursor_moment=moment["id"] if moment else None)
         if self.ply in self.score_items:
-            self.moves.setCurrentItem(self.score_items[self.ply])
+            self.moves.setCurrentItem(*self.score_items[self.ply])
         self._select_moment()
         self._render()
 
@@ -670,8 +685,13 @@ class Review(QWidget):
             index = next((i for i in reversed(range(len(points))) if points[i] <= self.ply), len(points) - 1)
         self.go(points[index], self.moments[index])
 
-    def _score_clicked(self, item, _):
-        ply, pv = item.data(0, Qt.ItemDataRole.UserRole)
+    def _score_clicked(self, item, column):
+        target = item.data(column, Qt.ItemDataRole.UserRole)
+        if column == 0:
+            target = item.data(1, Qt.ItemDataRole.UserRole) or item.data(3, Qt.ItemDataRole.UserRole)
+        if target is None:
+            return
+        ply, pv = target
         self.go(ply)
         if pv:
             self.branch, self.step = list(pv), len(pv)

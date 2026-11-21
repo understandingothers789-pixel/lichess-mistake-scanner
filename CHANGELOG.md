@@ -1,5 +1,10 @@
 # What changed
 
+## v0.1.9
+
+- Refined the interface with slate panels, teal controls, lavender Maia values and a more compact toolbar inspired by Nocturne.
+- The game score pairs White and Black on a single row, with separate clickable moves and evaluations. The analysis panel shows the current evaluation beside the position controls.
+
 ## v0.1.8
 
 - Toggle Live Stockfish on the Analysis tab to evaluate the current board and explore engine variations.

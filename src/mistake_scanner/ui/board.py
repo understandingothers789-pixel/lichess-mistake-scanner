@@ -150,10 +150,10 @@ class BoardWidget(QWidget):
             width = max(70, painter.fontMetrics().horizontalAdvance(text) + 20)
             badge = QRectF(rect.right() - width, y, width, CLOCK_HEIGHT - 4)
             white = color == chess.WHITE
-            painter.setPen(QPen(QColor("#65746b" if color == self.board.turn else BORDER), 1))
-            painter.setBrush(QColor("#eceddf" if white else "#25312b"))
+            painter.setPen(QPen(QColor("#627b91" if color == self.board.turn else BORDER), 1))
+            painter.setBrush(QColor("#eceddf" if white else "#222e3c"))
             painter.drawRoundedRect(badge, 5, 5)
-            painter.setPen(QColor("#27372f" if white else "#eff1e8"))
+            painter.setPen(QColor("#18222e" if white else "#eff1e8"))
             painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, text)
 
     def _arrow(self, painter, rect, block, origin, target, color):
@@ -182,16 +182,16 @@ class BoardWidget(QWidget):
         if self.flip:
             portion = 1 - portion
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#27372f") if not self.flip else QColor("#e3e9d3"))
+        painter.setBrush(QColor("#18222e") if not self.flip else QColor("#e3e9d3"))
         painter.drawRoundedRect(area, 4, 4)
         bottom = QRectF(area.x(), area.bottom() - area.height() * portion, area.width(), area.height() * portion)
-        painter.setBrush(QColor("#e3e9d3") if not self.flip else QColor("#27372f"))
+        painter.setBrush(QColor("#e3e9d3") if not self.flip else QColor("#18222e"))
         painter.drawRoundedRect(bottom, 3, 3)
         font = QFont(self.font())
         font.setPixelSize(10)
         font.setBold(True)
         painter.setFont(font)
-        painter.setPen(QColor("#29362e") if not self.flip else QColor("#e3e9d3"))
+        painter.setPen(QColor("#1b2633") if not self.flip else QColor("#e3e9d3"))
         value_text = "—"
         if score:
             value_text = f"M{score.mate}" if score.mate is not None else f"{abs(score.cp or 0)/100:.1f}"
@@ -248,7 +248,7 @@ class EvalGraph(QWidget):
         self.moments = {}
         self.ply = 0
         self.length = 0
-        self.setMinimumHeight(128)
+        self.setMinimumHeight(80)
         self.setMouseTracking(True)
         self.setAccessibleName("Clickable White-perspective evaluation graph")
 
@@ -278,7 +278,7 @@ class EvalGraph(QWidget):
         painter.setFont(QFont(self.font().family(), 8))
         for level in (3, 0, -3):
             y = area.center().y() - level * area.height() / 12
-            painter.setPen(QPen(QColor("#526a59" if level == 0 else BORDER), 1, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(QColor("#3c5268" if level == 0 else BORDER), 1, Qt.PenStyle.DashLine))
             painter.drawLine(QPointF(area.left(), y), QPointF(area.right(), y))
             painter.setPen(QColor(MUTED))
             painter.drawText(QPointF(7, y + 4), f"{level:+d}" if level else "0")
@@ -294,9 +294,9 @@ class EvalGraph(QWidget):
         shade.lineTo(QPointF(points[-1][1].x(), area.center().y()))
         shade.closeSubpath()
         gradient = QLinearGradient(0, area.top(), 0, area.bottom())
-        gradient.setColorAt(0, QColor("#54765b"))
-        gradient.setColorAt(0.5, QColor("#293c31"))
-        gradient.setColorAt(1, QColor("#805e40"))
+        gradient.setColorAt(0, QColor("#345b64"))
+        gradient.setColorAt(0.5, QColor("#1b2633"))
+        gradient.setColorAt(1, QColor("#514638"))
         painter.fillPath(shade, gradient)
         for first, second in zip(points, points[1:]):
             pen = QPen(QColor(ACCENT if second[3] else MUTED if second[2] else MINT), 1.9)
@@ -305,7 +305,7 @@ class EvalGraph(QWidget):
             painter.setPen(pen)
             painter.drawLine(first[1], second[1])
         selected = self._point(self.ply, Score(cp=0), area)
-        painter.setPen(QPen(QColor("#8aa78e"), 1))
+        painter.setPen(QPen(QColor("#7598af"), 1))
         painter.drawLine(QPointF(selected.x(), area.top()), QPointF(selected.x(), area.bottom()))
         for ply, point, _, deep in points:
             if ply in self.moments or deep or ply == self.ply:

@@ -61,8 +61,14 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         assert review.line_table.rowCount() == 5
         assert review.line_table.item(0, 3).text() == "d20"
         assert "Played Nf6" in review.summary.text()
-        assert review.moves.topLevelItemCount() == 8
+        assert review.moves.topLevelItemCount() == 5
 
+        move_row, black_column = review.score_items[6]
+        assert review.score_items[5] == (move_row, 1)
+        review._score_clicked(move_row, black_column)
+        assert review.ply == 6
+        review._score_clicked(move_row, 1)
+        assert review.ply == 5
         QTest.mouseClick(review.after, Qt.MouseButton.LeftButton)
         assert review.ply == 6 and review.board.board.peek() == chess.Move.from_uci("g8f6")
         assert review.line_table.item(0, 0).text().startswith("Qxf7")
