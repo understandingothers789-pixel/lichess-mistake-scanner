@@ -79,9 +79,31 @@ jobs:
           if ($env:ENABLE_PGO -eq 'true') { $options += '--pgo' }
           .\.venv\Scripts\python.exe scripts/windows-engine-check.py @options --compile --msys "${{ steps.msys.outputs.msys2-location }}"
 
+  source:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Test the extracted Python source download
+        run: |
+          git archive --format=zip --prefix=SecondLook-Python/ -o SecondLook-Python.zip HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Source archive creation failed.' }
+          Expand-Archive SecondLook-Python.zip -DestinationPath source-check
+          Push-Location source-check/SecondLook-Python
+          python launch.py --check
+          if ($LASTEXITCODE -ne 0) { throw 'Source launch failed.' }
+          Pop-Location
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SecondLook-Python
+          path: SecondLook-Python.zip
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: app
+    needs: [app, source]
     runs-on: windows-2022
     permissions:
       contents: write
@@ -91,8 +113,12 @@ jobs:
         with:
           name: SecondLook-windows-x64
           path: release
-      - name: Publish the Windows ZIP
+      - uses: actions/download-artifact@v4
+        with:
+          name: SecondLook-Python
+          path: release
+      - name: Publish Windows downloads
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$env:RELEASE_TAG" release/SecondLook-windows-x64.zip --verify-tag --title "Second Look $env:RELEASE_TAG" --notes-file CHANGELOG.md
+        run: gh release create "$env:RELEASE_TAG" release/SecondLook-windows-x64.zip release/SecondLook-Python.zip --verify-tag --title "Second Look $env:RELEASE_TAG" --notes-file CHANGELOG.md

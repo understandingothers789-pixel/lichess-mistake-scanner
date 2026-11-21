@@ -2,9 +2,21 @@
 
 Second Look is a standalone Windows x64 desktop application for finding chess mistakes in Lichess games. It streams games, records Stockfish analysis in a local SQLite library, and uses Maia 3 79M to rank verified mistakes by how likely a human at the relevant rating was to play them. Open a discovery to see its game, engine lines, and probabilities immediately.
 
-[**Download Second Look for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/latest/download/SecondLook-windows-x64.zip) · [What changed](CHANGELOG.md)
+[**Download Second Look for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/latest/download/SecondLook-windows-x64.zip) · [**Download the Python edition**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/latest/download/SecondLook-Python.zip) · [What changed](CHANGELOG.md)
 
 The Windows release includes the Maia CPU runtime. Extract the whole ZIP, launch SecondLook.exe, then use **Scanner → Download model** to fetch the verified checkpoint.
+
+## If Smart App Control blocks SecondLook.exe
+
+Download the **Python edition**. Install **Python 3.12 x64** with the launcher from python.org, extract the ZIP, and open PowerShell in the extracted `SecondLook-Python` folder. [Official Python 3.12 Windows installer](https://www.python.org/downloads/release/python-31210/)
+
+~~~powershell
+py -3.12 launch.py
+~~~
+
+The launcher installs the core app into a local virtual environment on the first run. In **Engines**, select a Stockfish executable permitted by Windows. Install **Git for Windows** and run `py -3.12 launch.py --with-maia` when you want the optional CPU runtime, then choose **Scanner → Download model**. Both editions use the same default library.
+
+Keep Smart App Control enabled. Windows evaluates the Python runtime and native dependencies independently. If Windows Security blocks a Stockfish executable or a DLL, check the file name in Protection History. An allowed build of that component is needed to use it.
 
 ## Run from source on Windows 11
 

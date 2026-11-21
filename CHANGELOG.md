@@ -1,5 +1,11 @@
 # What changed
 
+## v0.1.4
+
+- Added a Python source download and launcher for systems that block the packaged executable.
+- The launcher installs the core app first. Stockfish and Maia can be configured separately.
+- Windows CI tests the extracted Python download before publishing it.
+
 ## v0.1.3
 
 - Reanalyze a saved game directly with the currently selected Stockfish engine and retain both results.
