@@ -1,0 +1,50 @@
+name: Windows verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      live_engine:
+        description: Download and test the current official Windows development build
+        type: boolean
+        default: true
+      compile_engine:
+        description: Build native Stockfish using MSYS2 once
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install fixed Windows dependencies
+        run: .\scripts\setup-windows.ps1
+      - name: Test app and package
+        run: .\scripts\build-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SecondLook-windows-x64
+          path: dist/SecondLook-windows-x64.zip
+      - name: Validate official engine install, reuse and UCI
+        if: inputs.live_engine || inputs.compile_engine
+        run: .\.venv\Scripts\python.exe scripts/windows-engine-check.py
+      - name: Install an isolated build toolchain on the runner
+        if: inputs.compile_engine
+        uses: msys2/setup-msys2@v2
+        id: msys
+        with:
+          msystem: UCRT64
+          install: make mingw-w64-ucrt-x86_64-gcc
+          location: D:\sf-msys
+      - name: Compile and validate native Stockfish
+        if: inputs.compile_engine
+        run: .\.venv\Scripts\python.exe scripts/windows-engine-check.py --compile --msys "${{ steps.msys.outputs.msys2-location }}"

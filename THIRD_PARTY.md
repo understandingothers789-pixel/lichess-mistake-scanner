@@ -1,0 +1,11 @@
+# Third-party components
+
+**Stockfish** is developed by the Stockfish contributors and licensed under GPL-3.0. Second Look launches the user's Stockfish executable as a separate UCI process. Its engine manager downloads the original upstream package or builds an exact upstream commit. If distributing a Stockfish binary, include its notices and provide its corresponding source, including the exact commit and build inputs. [Stockfish source and license](https://github.com/official-stockfish/Stockfish)
+
+**Maia 3 79M** uses the official CPU inference code from UofT CSSLab at commit `1e13597c42d4858b7cfd7cfdae01e297263364b2` and the official tensor checkpoint at revision `a107d6ceb7b298cb04ae1da4edffe2939858b894`. The checkpoint's verified SHA-256 is `3fc6181d5db789b45a15305732148757ae74efa3e0028e81ba335b462dac45c2`. The upstream code and checkpoint are AGPL-3.0. The checkpoint and model sources are acquired separately. [Upstream code and license](https://github.com/CSSLab/maia3/tree/1e13597c42d4858b7cfd7cfdae01e297263364b2) · [Official weights and license](https://huggingface.co/UofTCSSLab/Maia3-79M/tree/a107d6ceb7b298cb04ae1da4edffe2939858b894)
+
+Cite Daniel Monroe, George Eilender, Philip Chalmers, Zhenwei Tang, and Ashton Anderson. “Chessformer: A Unified Architecture for Chess Modeling.” ICLR 2026. [Paper](https://openreview.net/forum?id=2ltBRzEHyd)
+
+**Lichess** supplies public games through its standard database dumps and API. Standard monthly exports are public domain under CC0. [Lichess database](https://database.lichess.org/) · [Lichess API](https://lichess.org/api)
+
+**Other runtime libraries** include python-chess (GPL-3.0+), PySide6/Qt (LGPL-3.0 or GPL options), PyTorch (BSD-style), httpx (BSD-3-Clause), python-zstandard (BSD-style), psutil (BSD-3-Clause), and platformdirs (MIT). The portable build uses PyInstaller under its bundling exception and dynamically loads Qt libraries. Before redistribution, review the dependency notices and supply the source, notices, and library replacement rights required by the applicable GPL, AGPL, and LGPL terms. [python-chess](https://github.com/niklasf/python-chess) · [Qt for Python licensing](https://doc.qt.io/qtforpython-6/licenses.html) · [PyTorch](https://github.com/pytorch/pytorch) · [PyInstaller license](https://pyinstaller.org/en/stable/license.html)
