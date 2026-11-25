@@ -22,7 +22,7 @@ from ..maia import (CHECKPOINT_NAME, CHECKPOINT_SHA, CHECKPOINT_SIZE, MaiaProces
 
 from ..model import SPEEDS, GameFilter, SearchSettings, Source, file_digest
 from ..network import Network
-from .theme import Task, button, combo, error, label, spin
+from .theme import Task, button, cell, combo, error, label, spin, table
 
 
 def bytes_text(count: int) -> str:
@@ -84,6 +84,7 @@ class ScannerView(QWidget):
         self.task = None
         self.model_task = None
         self.scan_snapshot = []
+        self.day_snapshot = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 14, 18, 12)
@@ -126,7 +127,9 @@ class ScannerView(QWidget):
         archive_form.setContentsMargins(0, 0, 0, 0)
         previous = (date.today().replace(day=1) - timedelta(days=1)).isoformat()[:7]
         self.single_day = QCheckBox("Scan a single UTC day")
+        self.day_batch = QCheckBox("Batch several UTC days")
         archive_form.addRow(self.single_day)
+        archive_form.addRow(self.day_batch)
         self.first_month = self._field("YYYY-MM", previous)
         self.last_month = self._field("YYYY-MM", previous)
         first_month_row = archive_form.rowCount()
@@ -138,17 +141,35 @@ class ScannerView(QWidget):
         self.archive_day.setCalendarPopup(True)
         day_row = archive_form.rowCount()
         archive_form.addRow("UTC day", self.archive_day)
+        self.batch_dates = self._field("Dates separated by commas")
+        date_choices = QHBoxLayout()
+        date_choices.addWidget(self.batch_dates, 1)
+        date_choices.addWidget(button("Add UTC day", self._add_batch_day))
+        date_list_row = archive_form.rowCount()
+        archive_form.addRow("Batch dates", date_choices)
+        self.daily_limit = spin(250, 1, 100_000_000)
+        archive_form.addRow("Games per day", self.daily_limit)
 
-        def show_day(checked):
+        def show_days():
+            batch = self.day_batch.isChecked()
+            dated = self.single_day.isChecked() or batch
             for row in range(first_month_row, day_row):
-                archive_form.setRowVisible(row, not checked)
-            archive_form.setRowVisible(day_row, checked)
+                archive_form.setRowVisible(row, not dated)
+            archive_form.setRowVisible(day_row, dated)
+            archive_form.setRowVisible(date_list_row, batch)
+            archive_form.setRowVisible(self.daily_limit, batch)
 
-        self.single_day.toggled.connect(show_day)
-        show_day(False)
+        def toggle_days(checked, other):
+            if checked:
+                other.setChecked(False)
+            show_days()
+
+        self.single_day.toggled.connect(lambda checked: toggle_days(checked, self.day_batch))
+        self.day_batch.toggled.connect(lambda checked: toggle_days(checked, self.single_day))
+        show_days()
         self.cache_mode = QCheckBox("Download to managed archive cache")
         archive_form.addRow(self.cache_mode)
-        self.cache_location = self._field("Cache directory", str(self.root / "cache"))
+        self.cache_location = self._field("Cache directory", library.setting("archive_cache_dir", str(self.root / "cache")))
         browse = QHBoxLayout()
         browse.addWidget(self.cache_location, 1)
         browse.addWidget(button("Browse…", self._pick_cache))
@@ -222,11 +243,15 @@ class ScannerView(QWidget):
             filters.addRow(title, control)
 
         def show_filter_dates():
-            visible = self.source.currentData() != "archive" or not self.single_day.isChecked()
+            archive = self.source.currentData() == "archive"
+            batch = archive and self.day_batch.isChecked()
+            visible = not archive or not (self.single_day.isChecked() or batch)
             filters.setRowVisible(self.since, visible)
             filters.setRowVisible(self.until, visible)
+            filters.setRowVisible(self.game_limit, not batch)
 
         self.single_day.toggled.connect(show_filter_dates)
+        self.day_batch.toggled.connect(show_filter_dates)
         self.source.currentIndexChanged.connect(show_filter_dates)
         filters.addRow(self.clocks)
         self.start_button = button("Start scan", self.start_scan, role="primary")
@@ -299,6 +324,12 @@ class ScannerView(QWidget):
             control.addWidget(item)
         control.addStretch()
         progress.addLayout(control)
+        self.day_counts = table(["UTC day", "Games selected", "Quota", "Source"])
+        for column, width in enumerate((115, 122, 88)):
+            self.day_counts.setColumnWidth(column, width)
+        self.day_counts.setMaximumHeight(153)
+        self.day_counts.hide()
+        progress.addWidget(self.day_counts)
         self.recent_errors = QPlainTextEdit()
         self.recent_errors.setReadOnly(True)
         self.recent_errors.setMaximumHeight(100)
@@ -338,6 +369,12 @@ class ScannerView(QWidget):
         widget = QLineEdit(value)
         widget.setPlaceholderText(placeholder)
         return widget
+
+    def _add_batch_day(self):
+        selected = self.archive_day.date().toString("yyyy-MM-dd")
+        days = self.batch_dates.text().replace(",", " ").split()
+        if selected not in days:
+            self.batch_dates.setText(", ".join(sorted([*days, selected])))
 
     def _rules(self):
         try:
@@ -420,13 +457,23 @@ class ScannerView(QWidget):
         try:
             source = self.source.currentData()
             day = self.archive_day.date().toString("yyyy-MM-dd") if source == "archive" and self.single_day.isChecked() else ""
+            days = ()
+            if source == "archive" and self.day_batch.isChecked():
+                tokens = self.batch_dates.text().replace(",", " ").split()
+                if not tokens:
+                    raise ValueError("Add at least one UTC day to the batch.")
+                try:
+                    days = tuple(sorted({date.fromisoformat(token).isoformat() for token in tokens}))
+                except ValueError as exc:
+                    raise ValueError("Enter the batch dates as YYYY-MM-DD.") from exc
             filters = GameFilter(
                 self.rating_min.value() or None, self.rating_max.value() or None, self.rating_mode.currentData(),
                 tuple(name for name, box in self.speeds.items() if box.isChecked()), self.rated.currentData(),
-                self.tc.text().strip(), day or self.since.text().strip(), day or self.until.text().strip(), self.opening.text().strip(),
+                self.tc.text().strip(), days[0] if days else day or self.since.text().strip(),
+                days[-1] if days else day or self.until.text().strip(), self.opening.text().strip(),
                 self.eco.text().strip(), self.user.text().strip(), self.clocks.isChecked(),
             )
-            rules, limit = self.rules, self.game_limit.value()
+            rules, limit = self.rules, 0 if days else self.game_limit.value()
 
             def create(sources, name):
                 identity = self.library.create_scan(name, sources, filters, rules, profile, limit)
@@ -440,19 +487,25 @@ class ScannerView(QWidget):
                 cache = Path(self.cache_location.text()) if self.cache_mode.isChecked() else None
                 if day:
                     first = last = day[:7]
+                elif days:
+                    first, last = days[0][:7], days[-1][:7]
                 self.library.set_setting("archive_cache_gb", self.cache_limit.value())
+                if cache is not None:
+                    self.library.set_setting("archive_cache_dir", str(cache.expanduser().resolve()))
                 size = self.cache_limit.value() * 1000 ** 3
                 delete = self.delete_cache.isChecked()
+                batch = {"days": days, "daily_limit": self.daily_limit.value()} if days else {}
 
                 def planned(_):
                     network = Network()
                     try:
-                        return archive_sources(network, first, last, cache=cache, limit_bytes=size, delete_after=delete)
+                        return archive_sources(network, first, last, cache=cache, limit_bytes=size, delete_after=delete, **batch)
                     finally:
                         network.close()
 
                 self.info.emit("Checking Lichess's archive list and official checksums…")
-                self._launch(planned, lambda value: create(value, day or (first if first == last else f"{first}–{last}")), "Start archive scan")
+                title = f"{len(days)} UTC days" if days else day or (first if first == last else f"{first}–{last}")
+                self._launch(planned, lambda value: create(value, title), "Start archive scan")
             elif source == "api":
                 mode, value = self.api_mode.currentData(), self.api_value.text().strip()
                 sources = api_sources(mode, value, filters, vs=self.api_opponent.text(),
@@ -587,9 +640,11 @@ class ScannerView(QWidget):
         if row is None:
             for widget in (self.pause, self.resume, self.cancel):
                 widget.setEnabled(False)
+            self.day_counts.hide()
             return
         scan = self.library.scan_progress(row["id"])
         sources, jobs = scan["sources"], scan["jobs"]
+        self._show_day_counts(row, sources)
         states = [source["state"] for source in sources]
         errors = [source["error"] for source in sources if source["state"] == "failed"]
         errors.extend(f"{job['stage'].capitalize()} — {job['error']}" for job in scan["errors"])
@@ -653,6 +708,22 @@ class ScannerView(QWidget):
         content = "\n".join(errors)
         if content != self.recent_errors.toPlainText():
             self.recent_errors.setPlainText(content)
+
+    def _show_day_counts(self, scan, sources):
+        dates = [(day, item["spec"]["params"]["daily_limit"], item["state"])
+                 for item in sources for day in item["spec"]["params"].get("days", ())]
+        self.day_counts.setVisible(bool(dates))
+        snapshot = scan["id"], scan["selected"], dates
+        if not dates or snapshot == self.day_snapshot:
+            return
+        self.day_snapshot = snapshot
+        counts = self.library.scan_day_counts(scan["id"])
+        self.day_counts.setRowCount(len(dates))
+        for row, (day, limit, state) in enumerate(dates):
+            count = counts.get(day, 0)
+            status = "Quota reached" if count >= limit else ("Source ended" if state == "done" else state.capitalize())
+            for column, value in enumerate((day, f"{count:,}", f"{limit:,}", status)):
+                self.day_counts.setItem(row, column, cell(value))
 
     @staticmethod
     def _stage_state(state, active, waiting, failed, upstream_complete, upstream_status, queued_status="Queued"):

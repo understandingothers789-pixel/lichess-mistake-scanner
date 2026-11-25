@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel, QMainWindow, QScrollArea, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from ..analysis import retained_outcome
 from ..exports import san_line, write_export
 from ..model import Score, SearchSettings, Variation, board_at, position_key
 from .board import BoardWidget, EvalGraph
@@ -91,6 +92,9 @@ class Review(QWidget):
     reanalyze = Signal(int)
     open_library = Signal()
     open_scanner = Signal()
+    review_next = Signal()
+    review_stop = Signal()
+    position_opened = Signal(int, int)
     info = Signal(str)
 
     def __init__(self, library, runner, parent=None):
@@ -173,6 +177,16 @@ class Review(QWidget):
         self.board_position = label("Starting position", "muted")
         lower.addWidget(self.board_position)
         board_layout.addLayout(lower)
+        self.review_bar = QWidget()
+        review_controls = QHBoxLayout(self.review_bar)
+        review_controls.setContentsMargins(0, 0, 0, 0)
+        self.review_progress = label("", "label")
+        review_controls.addWidget(self.review_progress, 1)
+        self.mark_next = button("Mark reviewed && next", self.review_next.emit, role="primary")
+        review_controls.addWidget(self.mark_next)
+        review_controls.addWidget(button("Stop review", self.review_stop.emit))
+        self.review_bar.hide()
+        board_layout.addWidget(self.review_bar)
         controls = QHBoxLayout()
         for text, callback, tip in (
             ("|‹", lambda: self.go(0), "First position"),
@@ -229,8 +243,10 @@ class Review(QWidget):
         phase.addStretch()
         analysis_layout.addLayout(phase)
         self.scan_scores = label("", "muted", wrap=True)
+        self.scan_decision = label("", "muted", wrap=True)
         self.comparison_status = label("", "label", wrap=True)
         analysis_layout.addWidget(self.scan_scores)
+        analysis_layout.addWidget(self.scan_decision)
         analysis_layout.addWidget(self.comparison_status)
         self.line_table = table(["Move", "Eval", "Continuation", "Depth", "Maia"])
         self.line_table.horizontalHeader().setStretchLastSection(False)
@@ -368,6 +384,11 @@ class Review(QWidget):
             self._compact_layout()
         else:
             self.workspace.restoreState(self.reset_state)
+
+    def set_review_progress(self, current=0, total=0, *, is_game=False):
+        self.review_progress.setText(f"{'Game' if is_game else 'Finding'} {current:,} of {total:,}")
+        self.mark_next.setText("Mark reviewed && finish" if current == total else "Mark reviewed && next")
+        self.review_bar.setVisible(total > 0)
 
     def save(self):
         self.layout_states[self.compact] = self.workspace.saveState()
@@ -542,6 +563,7 @@ class Review(QWidget):
         self.position_label.setText("")
         self.maia.setText("")
         self.scan_scores.setVisible(can_inspect)
+        self.scan_decision.setVisible(can_inspect)
         if can_inspect:
             root = board_at(self.game["root"], self.game["moves"], move_ply - 1)
             actual = root.san(chess.Move.from_uci(self.game["moves"][move_ply - 1]))
@@ -549,6 +571,7 @@ class Review(QWidget):
             saved_before = _score_text(*self._scan_score(move_ply - 1))
             saved_after = _score_text(*self._scan_score(move_ply))
             self.scan_scores.setText(f"Saved scan positions · Before {saved_before} · After {saved_after}")
+            self.scan_decision.setText(self._decision_text(move_ply, root.turn))
         self._render_comparison(can_inspect)
         if moment:
             self._render_moment(moment, bool(after))
@@ -729,6 +752,54 @@ class Review(QWidget):
                     f"Played {played_move} {_score_text(played.score, played.depth)} · After {_score_text(reply.score, reply.depth)}")
         self.comparison_status.setText(text)
         self.comparison_status.setVisible(can_inspect and bool(text))
+
+    def _decision_text(self, ply, turn):
+        mistake, evaluation = self.library.move_decision(self.game["scan_game"], ply)
+        rules = SearchSettings(**self.scan["rules"])
+        if mistake:
+            state = mistake["state"]
+            if state == "candidate":
+                return "Scan decision · Verification failed" if mistake["detail_state"] == "failed" else (
+                    "Scan decision · Candidate awaiting verification")
+            detail = mistake["detail"]
+            depth = detail["actual"]["depth"]
+            if state != "rejected":
+                value = detail["loss_cp"]
+                reason = f"{value / 100:.2f} pawn loss" if value is not None else detail["reason"]
+                return f"Scan decision · Verified at d{depth} · {reason}"
+            reason = detail.get("rejection")
+            if reason is None:
+                lines = self.library.cached_search(detail["before_key"])
+                if lines:
+                    best = lines[0].score.for_turn(turn)
+                    actual = Score(**detail["actual"]["score"]).for_turn(turn)
+                    reason = retained_outcome(best, actual, rules)
+            suffix = f" · {self._decision_reason(*reason, rules)}" if reason else ""
+            return f"Scan decision · Candidate rejected at d{depth}{suffix}"
+        if not evaluation:
+            return "Scan decision · Waiting for discovery"
+        decision = evaluation["decision"]
+        if not decision:
+            return "Scan decision · This scan saved position scores only"
+        code, change, depth = decision
+        if code == "start":
+            return f"Scan decision · This scan started checking mistakes at move {rules.first_move}"
+        if code == "best":
+            return f"Scan decision · Stockfish chose the played move at d{depth}"
+        if code == "terminal":
+            return "Scan decision · The game was already over"
+        step = "Discovery screen" if code.startswith("screen_") else "Played-move check"
+        return f"Scan decision · {step} at d{depth} · {self._decision_reason(code.removeprefix('screen_'), change, rules)}"
+
+    @staticmethod
+    def _decision_reason(code, change, rules):
+        if code == "threshold":
+            return f"{max(0, change) / 100:.2f} pawn loss · {rules.loss_cp / 100:.2f} threshold"
+        if code == "decisive":
+            return f"Both scores kept the same decisive outcome (±{rules.decisive_cp / 100:.2f})"
+        if code == "mate":
+            return "The mate change stayed below the scan’s loss rule"
+        return "Stockfish supplied no comparable scores"
 
     def _render_moment(self, moment, after):
         root = board_at(self.game["root"], self.game["moves"], moment["ply"] - 1)
@@ -952,7 +1023,9 @@ class Review(QWidget):
                       frequency[item["played"]], item["day"], item["ply"])
             for col, value in enumerate(values):
                 widget.setItem(row, col, cell(value))
-        widget.cellDoubleClicked.connect(lambda row, _: (dialog.accept(), self.load(games[row]["scan_game"], ply=games[row]["ply"] - 1)))
+        widget.cellDoubleClicked.connect(lambda row, _: (
+            dialog.accept(), self.position_opened.emit(games[row]["scan_game"], games[row]["ply"] - 1),
+        ))
         layout.addWidget(widget)
         layout.addWidget(button("Close", dialog.accept))
         dialog.exec()

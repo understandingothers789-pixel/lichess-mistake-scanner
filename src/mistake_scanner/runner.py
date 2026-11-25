@@ -168,6 +168,8 @@ class Runner:
             if played_move is None:
                 result.set_result(before)
             else:
+                if not before[0].pv:
+                    raise ValueError("The game ended before the selected move.")
                 played = next((line for line in before if line.pv and line.pv[0] == played_move), None)
                 if played is None:
                     played = engine(board, rules.detail_depth, move=played_move, seconds=2.0)[0]
@@ -277,8 +279,9 @@ class Runner:
                 return engine(*args, **kwargs)
 
             if stage == "discovery":
-                traces, candidates, occurrences = discover(game, rules, search)
-                self.library.finish_discovery(job, game, traces, candidates, occurrences)
+                decisions = {}
+                traces, candidates, occurrences = discover(game, rules, search, decisions=decisions)
+                self.library.finish_discovery(job, game, traces, candidates, occurrences, decisions)
             else:
                 detail = analyse_critical(self.library, game, mistake, profile, rules, search)
                 elo = round_rating(game["white_elo"], game["black_elo"])
@@ -314,6 +317,10 @@ class Runner:
         source = Source(**row["spec"])
         scan_id, source_id = row["scan_id"], row["id"]
         filters = GameFilter(**self.library.scan(scan_id)["filters"])
+        wanted_days = set(source.params.get("days", ()))
+        daily_limit = source.params.get("daily_limit", 0)
+        day_counts = self.library.scan_day_counts(scan_id) if wanted_days else {}
+        remaining_days = {day for day in wanted_days if day_counts.get(day, 0) < daily_limit}
         last_check = 0.0
         scan = None
 
@@ -344,6 +351,7 @@ class Runner:
                 for index, game, reason in records(
                     text, filters, start if source.immutable else 0, check,
                     remote=source.kind != "local", known_rated=source.rated,
+                    days=remaining_days if wanted_days else None,
                 ):
                     if game is None:
                         if reason != "replay" and index > start:
@@ -362,8 +370,16 @@ class Runner:
                     selected = self.library.import_game(source_id, scan_id, game, index, skipped, malformed)
                     skipped, malformed = 0, 0
                     self.wakeup.set()
-                    if selected and scan["game_limit"] and scan["selected"] + 1 >= scan["game_limit"]:
-                        break
+                    if selected:
+                        if wanted_days:
+                            day = game["day"]
+                            day_counts[day] = day_counts.get(day, 0) + 1
+                            if day_counts[day] >= daily_limit:
+                                remaining_days.remove(day)
+                            if not remaining_days:
+                                break
+                        if scan["game_limit"] and scan["selected"] + 1 >= scan["game_limit"]:
+                            break
             self.library.checkpoint(source_id, index, skipped, malformed)
             return index
 
@@ -379,7 +395,8 @@ class Runner:
                             raise ValueError("The saved source game no longer exists.")
                         self.library.import_game(source_id, scan_id, game, 1)
                     else:
-                        read(start)
+                        if not wanted_days or remaining_days:
+                            read(start)
                         delete_cached(source)
                     self.library.source_state(source_id, "done")
                     break

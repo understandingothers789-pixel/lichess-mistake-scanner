@@ -3,7 +3,7 @@ from __future__ import annotations
 import chess
 from PySide6.QtCore import QSignalBlocker, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLineEdit, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLineEdit, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ..model import SPEEDS, board_at
@@ -29,6 +29,7 @@ def _time_order(value):
 
 class LibraryView(QWidget):
     opened = Signal(int, object)
+    review_requested = Signal(str, object)
     info = Signal(str)
 
     def __init__(self, library, parent=None):
@@ -40,6 +41,8 @@ class LibraryView(QWidget):
         self.fetch = None
         self.wanted = None
         self.last_signature = None
+        self.active_group = None
+        self.group_page = 0
         self.time_controls = set()
         self.last_time_control_game = 0
         outer = QVBoxLayout(self)
@@ -51,8 +54,10 @@ class LibraryView(QWidget):
         headings.addWidget(label("Analysis library", "title"))
         headings.addWidget(label("Explore discoveries or open the full games they came from.", "muted"))
         heading.addLayout(headings, 1)
-        heading.addWidget(button("Export selected", lambda: self._export(False)))
-        heading.addWidget(button("Export filtered collection", lambda: self._export(True)))
+        self.export_selected = button("Export selected", lambda: self._export(False))
+        self.export_filtered = button("Export filtered collection", lambda: self._export(True))
+        heading.addWidget(self.export_selected)
+        heading.addWidget(self.export_filtered)
         outer.addLayout(heading)
         time_filters = QHBoxLayout()
         self.speed_filter = combo([("Any time category", ""), *((speed.capitalize(), speed) for speed in SPEEDS)])
@@ -67,6 +72,8 @@ class LibraryView(QWidget):
         time_filters.addWidget(self.speed_filter)
         time_filters.addWidget(self.time_filter)
         time_filters.addStretch()
+        self.grouped = QCheckBox("Group by position and move")
+        time_filters.addWidget(self.grouped)
         outer.addLayout(time_filters)
         self.tabs = QTabWidget()
         self.discoveries = QWidget()
@@ -105,7 +112,30 @@ class LibraryView(QWidget):
         for col, width in enumerate((68, 68, 105, 190, 96, 73, 190, 64, 78, 139)):
             self.discovery_table.setColumnWidth(col, width)
         self.discovery_table.cellDoubleClicked.connect(self._open)
-        discovery_layout.addWidget(self.discovery_table, 1)
+        self.discovery_stack = QStackedWidget()
+        self.discovery_stack.addWidget(self.discovery_table)
+        self.group_table = table(["Move", "Opening example", "Observed in library", "Games with findings"])
+        self.group_table.setColumnWidth(0, 110)
+        self.group_table.setColumnWidth(2, 180)
+        self.group_table.setColumnWidth(3, 175)
+        self.group_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.group_table.cellDoubleClicked.connect(self._open)
+        self.discovery_stack.addWidget(self.group_table)
+        members = QWidget()
+        member_layout = QVBoxLayout(members)
+        member_layout.setContentsMargins(0, 0, 0, 0)
+        member_heading = QHBoxLayout()
+        member_heading.addWidget(button("‹ Position groups", self._back_to_groups))
+        self.group_title = label("", "label", wrap=True)
+        member_heading.addWidget(self.group_title, 1)
+        member_layout.addLayout(member_heading)
+        self.member_table = table(["White", "Black", "UTC date", "Speed", "Maia", "Maia rating", "Status"])
+        for column in (0, 1):
+            self.member_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        self.member_table.cellDoubleClicked.connect(self._open)
+        member_layout.addWidget(self.member_table)
+        self.discovery_stack.addWidget(members)
+        discovery_layout.addWidget(self.discovery_stack, 1)
 
         game_layout = QVBoxLayout(self.games)
         game_layout.setContentsMargins(0, 8, 0, 0)
@@ -130,13 +160,15 @@ class LibraryView(QWidget):
         game_layout.addWidget(self.game_table, 1)
 
         foot = QHBoxLayout()
-        self.meta = label("", "muted")
+        self.meta = label("", "muted", wrap=True)
         self.prev = button("‹ Previous", lambda: self._turn(-1))
         self.next = button("Next ›", lambda: self._turn(1))
         self.open = button("Open analysis", self._open_selected, role="primary")
+        self.review_filtered = button("Review filtered results", self._start_review)
         foot.addWidget(self.meta, 1)
         foot.addWidget(self.prev)
         foot.addWidget(self.next)
+        foot.addWidget(self.review_filtered)
         foot.addWidget(self.open)
         outer.addLayout(foot)
 
@@ -149,12 +181,13 @@ class LibraryView(QWidget):
         self.time_filter.editTextChanged.connect(lambda _: self.debounce.start())
         for field in (self.sort, self.review, self.clock, self.game_sort, self.speed_filter):
             field.currentIndexChanged.connect(self._changed)
-        for field in (self.pending, self.bookmarks):
+        for field in (self.pending, self.bookmarks, self.grouped):
             field.toggled.connect(self._changed)
         self.refresh()
 
     def _changed(self, *_):
         self.page = 0
+        self.active_group = None
         self.refresh(force=True)
 
     def _turn(self, delta):
@@ -173,25 +206,48 @@ class LibraryView(QWidget):
                 "sort": self.game_sort.currentData(),
             }
         upper, lower = self.clock.currentData()
-        return self.library.discovery_page, {
+        options = {
             **time_filters,
             "query": self.search.text().strip(), "sort": self.sort.currentData(), "review": self.review.currentData(),
             "clock": upper, "clock_min": lower, "eco": self.eco.text().strip(), "pending": self.pending.isChecked(),
         }
+        if self.grouped.isChecked():
+            if self.active_group is None:
+                return self.library.discovery_groups, options
+            return self.library.group_members, {**options, "position": self.active_group[0], "played": self.active_group[1]}
+        return self.library.discovery_page, options
+
+    def _result_table(self, view):
+        return {"games": self.game_table, "groups": self.group_table,
+                "members": self.member_table, "moments": self.discovery_table}[view]
+
+    def _result_view(self):
+        if self.tabs.currentIndex() == 1:
+            return "games"
+        if not self.grouped.isChecked():
+            return "moments"
+        return "members" if self.active_group else "groups"
 
     def refresh(self, force=False):
         if not force and self.task and self.task.isRunning():
             return
         query, options = self._params()
-        tab, page = self.tabs.currentIndex(), self.page
-        request = (tab, page, options)
+        view, page = self._result_view(), self.page
+        request = (view, page, options)
+        self.grouped.setVisible(view != "games")
+        individual = view in ("games", "moments")
+        self.sort.setEnabled(individual)
+        self.export_selected.setEnabled(individual)
+        self.export_filtered.setEnabled(individual)
+        self.open.setText("Open source games" if view == "groups" else "Open analysis")
+        self.discovery_stack.setCurrentIndex({"groups": 1, "members": 2}.get(view, 0))
         if force and request != self.wanted:
             self.rows = []
             self.open.setEnabled(False)
+            self.review_filtered.setEnabled(False)
             self.prev.setEnabled(False)
             self.next.setEnabled(False)
-            self.discovery_table.setRowCount(0)
-            self.game_table.setRowCount(0)
+            self._result_table(view).setRowCount(0)
             self.meta.setText("Loading results…")
             self.last_signature = None
         self.wanted = request
@@ -210,7 +266,7 @@ class LibraryView(QWidget):
             if self.wanted == request:
                 self.last_time_control_game, controls, rows = results
                 self._show_time_controls(controls)
-                self._show_results(tab, page, rows)
+                self._show_results(view, page, rows)
 
         def done():
             self.fetch = None
@@ -236,28 +292,29 @@ class LibraryView(QWidget):
                 self.time_filter.addItem(time_control_label(value), value)
             self.time_filter.setEditText(text)
 
-    def _show_results(self, tab, page, fetched):
+    def _show_results(self, view, page, fetched):
         next_page = len(fetched) > PAGE
         rows = fetched[:PAGE]
-        signature = (tab, page, rows, next_page)
+        signature = (view, page, rows, next_page)
         if signature == self.last_signature:
             return
         self.last_signature = signature
         self.rows = rows
-        actual = self.game_table if tab == 1 else self.discovery_table
+        actual = self._result_table(view)
         actual.setRowCount(0)
         actual.setRowCount(len(rows))
+        populate = {"games": self._game_row, "moments": self._discovery_row,
+                    "groups": self._group_row, "members": self._member_row}[view]
         for row, item in enumerate(rows):
-            if actual is self.game_table:
-                self._game_row(row, item)
-            else:
-                self._discovery_row(row, item)
+            populate(row, item)
         self.prev.setEnabled(page > 0)
         self.next.setEnabled(next_page)
         self.open.setEnabled(bool(rows))
+        self.review_filtered.setEnabled(bool(rows) and view in ("games", "moments") and self.task is None)
         if rows:
             first = page * PAGE + 1
-            self.meta.setText(f"Results {first:,}–{first + len(rows) - 1:,}  ·  Double-click a row to open")
+            action = "Double-click a group to see its games" if view == "groups" else "Double-click a row to open"
+            self.meta.setText(f"Results {first:,}–{first + len(rows) - 1:,}  ·  {action}")
         else:
             self.meta.setText("No matching results. Run a scan or adjust the filters.")
 
@@ -299,8 +356,30 @@ class LibraryView(QWidget):
             color = ACCENT if column == 0 and item["probability"] is not None else AMBER if column == 1 else MUTED if column in (7, 8) else None
             self.discovery_table.setItem(row, column, cell(value, color, str(value) if value else None))
 
+    def _group_row(self, row, item):
+        san = chess.Board(item["position"]).san(chess.Move.from_uci(item["played"]))
+        values = (san, item["opening"], f"{item['observed']:,} of {item['reached']:,}" if item["reached"] else "—",
+                  item["source_games"])
+        for column, value in enumerate(values):
+            self.group_table.setItem(row, column, cell(
+                value, ACCENT if column == 2 else None,
+                "Times this move was played out of all recorded occurrences of the position" if column == 2 else None,
+            ))
+
+    def _member_row(self, row, item):
+        values = (item["white"], item["black"], item["day"], (item["speed"] or "").capitalize(),
+                  _prob(item["probability"]), item["maia_elo"], NAMES[item["state"]])
+        for column, value in enumerate(values):
+            self.member_table.setItem(row, column, cell(value, ACCENT if column == 4 else None,
+                                                       str(value) if value is not None else None))
+
+    def _back_to_groups(self):
+        self.active_group = None
+        self.page = self.group_page
+        self.refresh(force=True)
+
     def _open_selected(self):
-        actual = self.game_table if self.tabs.currentIndex() == 1 else self.discovery_table
+        actual = self._result_table(self._result_view())
         row = actual.currentRow()
         if row < 0 and self.rows:
             row = 0
@@ -309,24 +388,52 @@ class LibraryView(QWidget):
 
     def _open(self, row, _):
         item = self.rows[row]
-        if self.tabs.currentIndex() == 1:
+        view = self._result_view()
+        if view == "games":
             self.opened.emit(item["id"], None)
+        elif view == "groups":
+            self.active_group = item["position"], item["played"]
+            san = chess.Board(item["position"]).san(chess.Move.from_uci(item["played"]))
+            self.group_title.setText(f"{san} · {item['source_games']:,} source games with matching findings")
+            self.group_page, self.page = self.page, 0
+            self.refresh(force=True)
         else:
             self.opened.emit(item["scan_game"], item["id"])
 
+    def _start_review(self):
+        view = self._result_view()
+        if self.task is not None or view not in ("games", "moments"):
+            return
+        _, options = self._params()
+        self.review_filtered.setEnabled(False)
+
+        def load(_):
+            try:
+                return self.library.review_ids(view, options)
+            finally:
+                self.library.close_thread()
+
+        def done():
+            self.task = None
+            task.deleteLater()
+            self.review_filtered.setEnabled(bool(self.rows) and self._result_view() in ("games", "moments"))
+
+        task = self.task = Task(load, self)
+        task.succeeded.connect(lambda ids: self.review_requested.emit(view, ids))
+        task.failed.connect(self.info.emit)
+        task.finished.connect(done)
+        task.start()
+
     def _export(self, all_results):
-        if self.task and self.task.isRunning():
+        if self.task is not None or self._result_view() in ("groups", "members"):
             return
         is_games = self.tabs.currentIndex() == 1
         field = "games" if is_games else "moments"
         if all_results:
-            query, params = self._params()
+            _, params = self._params()
 
             def identities():
-                offset = 0
-                while batch := query(**params, offset=offset, limit=250):
-                    yield from (item["id"] for item in batch)
-                    offset += len(batch)
+                yield from self.library.review_ids(field, params)
 
             targets = {field: identities()}
         else:

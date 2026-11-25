@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from array import array
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -53,7 +54,7 @@ CREATE INDEX jobs_scan ON jobs(scan_id, state, stage);
 CREATE INDEX jobs_unfinished ON jobs(scan_id, state, stage) WHERE state!='done';
 CREATE TABLE evaluations (
     scan_game INTEGER NOT NULL REFERENCES scan_games,
-    ply INTEGER NOT NULL, score TEXT NOT NULL, depth INTEGER NOT NULL,
+    ply INTEGER NOT NULL, score TEXT NOT NULL, depth INTEGER NOT NULL, decision TEXT,
     PRIMARY KEY (scan_game, ply)
 );
 CREATE TABLE searches (id TEXT PRIMARY KEY, lines TEXT NOT NULL);
@@ -85,7 +86,15 @@ CREATE TRIGGER occurrence_count AFTER INSERT ON occurrences BEGIN
     INSERT INTO position_frequency VALUES (NEW.position, NEW.played, 1)
     ON CONFLICT (position, played) DO UPDATE SET count=count+1;
 END;
-PRAGMA user_version=3;
+PRAGMA user_version=4;
+"""
+
+DISCOVERY_COLUMNS = """
+    mistakes.*, scan_games.scan_id, games.white, games.black, games.white_elo,
+    games.black_elo, games.opening, games.eco, games.speed, games.day, jobs.state AS detail_state,
+    COALESCE(position_frequency.count, 0) AS observed,
+    EXISTS (SELECT 1 FROM mistakes prior WHERE prior.scan_game=mistakes.scan_game
+            AND prior.ply=mistakes.ply-1 AND prior.state IN ('verified','awaiting_maia','complete')) AS missed
 """
 
 
@@ -113,7 +122,7 @@ class Library:
         version = db.execute("PRAGMA user_version").fetchone()[0]
         if version == 0:
             db.executescript("BEGIN IMMEDIATE;\n" + SCHEMA + "\nCOMMIT;")
-        elif version in (1, 2):
+        elif version in (1, 2, 3):
             if version == 1:
                 db.executescript("""
                     BEGIN IMMEDIATE;
@@ -122,14 +131,21 @@ class Library:
                     PRAGMA user_version=2;
                     COMMIT;
                 """)
+            if version < 3:
+                db.executescript("""
+                    BEGIN IMMEDIATE;
+                    CREATE INDEX verified_rank ON mistakes(probability DESC, (loss_cp IS NULL) DESC, loss_cp DESC, id DESC)
+                        WHERE state IN ('verified','awaiting_maia','complete');
+                    PRAGMA user_version=3;
+                    COMMIT;
+                """)
             db.executescript("""
                 BEGIN IMMEDIATE;
-                CREATE INDEX verified_rank ON mistakes(probability DESC, (loss_cp IS NULL) DESC, loss_cp DESC, id DESC)
-                    WHERE state IN ('verified','awaiting_maia','complete');
-                PRAGMA user_version=3;
+                ALTER TABLE evaluations ADD COLUMN decision TEXT;
+                PRAGMA user_version=4;
                 COMMIT;
             """)
-        elif version != 3:
+        elif version != 4:
             raise RuntimeError(f"This application cannot open database schema version {version}.")
 
     def connection(self) -> sqlite3.Connection:
@@ -183,19 +199,29 @@ class Library:
             db.execute("INSERT INTO engines VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET profile=excluded.profile",
                        (profile["id"], encode(profile), profile["installed"]))
 
-    def engine_needed(self, identity: str) -> bool:
-        return self.connection().execute("""
-            SELECT 1 FROM scans WHERE json_extract(profile, '$.id')=?
+    def engine_users(self, identity: str, limit: int = 10) -> list[dict]:
+        return [dict(row) for row in self.connection().execute("""
+            SELECT id, name, state FROM scans WHERE json_extract(profile, '$.id')=?
             AND (((game_limit=0 OR selected<game_limit) AND EXISTS (
                      SELECT 1 FROM sources WHERE scan_id=scans.id AND state IN ('pending','running','failed')))
                  OR EXISTS (SELECT 1 FROM jobs WHERE scan_id=scans.id AND stage!='maia' AND state!='done'))
-            LIMIT 1
-        """, (identity,)).fetchone() is not None
+            ORDER BY id DESC LIMIT ?
+        """, (identity, limit))]
+
+    def engine_needed(self, identity: str) -> bool:
+        return bool(self.engine_users(identity, 1))
+
+    def engine_removal_block(self, identity: str) -> str:
+        scans = self.engine_users(identity, 6)
+        pinned = ", ".join(f"#{scan['id']} {scan['name']} ({scan['state']})" for scan in scans[:5])
+        if len(scans) > 5:
+            pinned += ", and other scans"
+        return f"Finish the Stockfish work in {pinned} before removing this engine." if pinned else ""
 
     def delete_engine(self, identity: str) -> None:
         with self.transaction() as db:
-            if self.engine_needed(identity):
-                raise ValueError("An unfinished scan still needs this engine.")
+            if message := self.engine_removal_block(identity):
+                raise ValueError(f"An unfinished scan still needs this engine. {message}")
             db.execute("DELETE FROM settings WHERE name='active_engine' AND value=?", (encode(identity),))
             db.execute("DELETE FROM engines WHERE id=?", (identity,))
 
@@ -225,6 +251,18 @@ class Library:
     def scan(self, identity: int) -> dict | None:
         return _decoded(self.connection().execute("SELECT * FROM scans WHERE id=?", (identity,)).fetchone(),
                         "filters", "rules", "profile")
+
+    def scan_day_counts(self, identity: int) -> dict[str, int]:
+        return dict(self.connection().execute("""
+            SELECT games.day, COUNT(*) FROM scan_games JOIN games ON games.id=scan_games.game_id
+            WHERE scan_games.scan_id=? GROUP BY games.day
+        """, (identity,)))
+
+    def archive_cache_directories(self) -> set[Path]:
+        return {Path(row[0]) for row in self.connection().execute("""
+            SELECT DISTINCT json_extract(spec, '$.params.cache') AS directory FROM sources
+            WHERE json_extract(spec, '$.kind')='archive_cache' AND directory IS NOT NULL
+        """)}
 
     def set_state(self, scan_id: int, state: str) -> None:
         if state not in ("running", "paused", "canceled"):
@@ -312,11 +350,12 @@ class Library:
             args.append(scan_id)
         return self.connection().execute(sql, args).fetchone()[0]
 
-    def finish_discovery(self, job: dict, game: dict, traces: list, candidates: list, occurrences: list) -> None:
+    def finish_discovery(self, job: dict, game: dict, traces: list, candidates: list, occurrences: list, decisions: dict) -> None:
         with self.transaction() as db:
             target, scan_id = job["target"], job["scan_id"]
-            db.executemany("INSERT INTO evaluations VALUES (?, ?, ?, ?)",
-                           [(target, ply, encode(score), depth) for ply, score, depth in traces])
+            db.executemany("INSERT INTO evaluations VALUES (?, ?, ?, ?, ?)",
+                           [(target, ply, encode(score), depth, encode(decisions[ply]) if ply in decisions else None)
+                            for ply, score, depth in traces])
             db.executemany("INSERT OR IGNORE INTO occurrences VALUES (?, ?, ?, ?)",
                            [(game["id"], ply, position, played) for ply, position, played in occurrences])
             for move in candidates:
@@ -402,6 +441,18 @@ class Library:
         return _decoded(self.connection().execute("SELECT * FROM mistakes WHERE id=?", (identity,)).fetchone(),
                         "discovery", "detail")
 
+    def move_decision(self, scan_game: int, ply: int) -> tuple[dict | None, dict | None]:
+        db = self.connection()
+        mistake = _decoded(db.execute("""
+            SELECT mistakes.*, jobs.state AS detail_state
+            FROM mistakes LEFT JOIN jobs ON jobs.stage='detail' AND jobs.target=mistakes.id
+            WHERE scan_game=? AND ply=?
+        """, (scan_game, ply)).fetchone(), "detail", "discovery")
+        evaluation = _decoded(db.execute("""
+            SELECT depth, decision FROM evaluations WHERE scan_game=? AND ply=?
+        """, (scan_game, ply)).fetchone(), "decision")
+        return mistake, evaluation
+
     def moments(self, scan_game: int) -> list[dict]:
         rows = self.connection().execute("""
             SELECT * FROM mistakes WHERE scan_game=? AND state!='rejected' ORDER BY ply
@@ -437,15 +488,12 @@ class Library:
         """, (last_game, newest))}
         return newest, controls
 
-    def game_page(self, query="", offset=0, limit=100, *, bookmarks=False, sort="recent", speed="", time_control="") -> list[dict]:
+    def _game_query(self, query="", *, bookmarks=False, sort="recent", speed="", time_control=""):
         order = {"recent": "scan_games.id DESC", "date": "games.day DESC", "white": "games.white COLLATE NOCASE",
                  "black": "games.black COLLATE NOCASE", "rating": "games.white_elo DESC, games.black_elo DESC",
                  "speed": "games.speed", "opening": "games.opening COLLATE NOCASE"}.get(sort, "scan_games.id DESC")
         args = []
         sql = """
-            SELECT scan_games.*, games.white, games.black, games.white_elo, games.black_elo,
-                   games.result, games.day, games.speed, games.time_control, games.opening, games.eco,
-                   jobs.state AS analysis_state
             FROM scan_games JOIN games ON games.id=scan_games.game_id
             JOIN jobs ON jobs.stage='discovery' AND jobs.target=scan_games.id
             WHERE 1=1
@@ -461,8 +509,16 @@ class Library:
             args.append(time_control)
         if bookmarks:
             sql += " AND scan_games.bookmarked=1"
-        rows = self.connection().execute(sql + f" ORDER BY {order},scan_games.id DESC LIMIT ? OFFSET ?",
-                                         [*args, limit, offset])
+        return sql, args, f"{order},scan_games.id DESC"
+
+    def game_page(self, query="", offset=0, limit=100, **options) -> list[dict]:
+        source, args, order = self._game_query(query, **options)
+        rows = self.connection().execute(f"""
+            SELECT scan_games.*, games.white, games.black, games.white_elo, games.black_elo,
+                   games.result, games.day, games.speed, games.time_control, games.opening, games.eco,
+                   jobs.state AS analysis_state
+            {source} ORDER BY {order} LIMIT ? OFFSET ?
+        """, [*args, limit, offset])
         games = []
         for row in rows:
             item = dict(row)
@@ -474,25 +530,21 @@ class Library:
             games.append(item)
         return games
 
-    def discovery_page(
-        self, query="", offset=0, limit=100, *, sort="probability", pending=False,
+    def _discovery_query(
+        self, query="", *, sort="probability", pending=False,
         review="all", clock: float | None = None, clock_min: float | None = None, eco="", speed="", time_control="",
-    ) -> list[dict]:
+        position=None, played=None,
+    ):
         order = {
             "probability": "mistakes.probability DESC, (mistakes.loss_cp IS NULL) DESC,mistakes.loss_cp DESC",
             "loss": "(mistakes.loss_cp IS NULL) DESC,mistakes.loss_cp DESC",
             "rating": "MIN(games.white_elo,games.black_elo) DESC",
             "speed": "games.speed, games.time_control", "opening": "games.opening COLLATE NOCASE",
             "recent": "mistakes.detected DESC", "review": "mistakes.reviewed, mistakes.bookmarked DESC",
-            "frequency": "observed DESC",
+            "frequency": "COALESCE(position_frequency.count, 0) DESC",
         }.get(sort, "mistakes.probability DESC,mistakes.loss_cp DESC")
         args = []
         sql = """
-            SELECT mistakes.*, scan_games.scan_id, games.white, games.black, games.white_elo,
-                games.black_elo, games.opening, games.eco, games.speed, jobs.state AS detail_state,
-                COALESCE(position_frequency.count, 0) AS observed,
-                EXISTS (SELECT 1 FROM mistakes prior WHERE prior.scan_game=mistakes.scan_game
-                        AND prior.ply=mistakes.ply-1 AND prior.state IN ('verified','awaiting_maia','complete')) AS missed
             FROM mistakes
             JOIN scan_games ON scan_games.id=mistakes.scan_game
             JOIN games ON games.id=scan_games.game_id
@@ -523,9 +575,57 @@ class Library:
         if eco:
             sql += " AND games.eco=?"
             args.append(eco.upper())
+        if position is not None:
+            sql += " AND mistakes.position=? AND mistakes.played=?"
+            args.extend([position, played])
+        return sql, args, f"{order},mistakes.id DESC"
+
+    def discovery_page(self, query="", offset=0, limit=100, **options) -> list[dict]:
+        source, args, order = self._discovery_query(query, **options)
         return [_decoded(row, "discovery", "detail") for row in self.connection().execute(
-            sql + f" ORDER BY {order},mistakes.id DESC LIMIT ? OFFSET ?", [*args, limit, offset],
+            f"SELECT {DISCOVERY_COLUMNS} {source} ORDER BY {order} LIMIT ? OFFSET ?", [*args, limit, offset],
         )]
+
+    def review_ids(self, kind: str, options: dict) -> array:
+        if kind == "games":
+            source, args, order = self._game_query(**options)
+            identity = "scan_games.id"
+        elif kind == "moments":
+            source, args, order = self._discovery_query(**options)
+            identity = "mistakes.id"
+        else:
+            raise ValueError("Unknown review collection.")
+        rows = self.connection().execute(f"SELECT {identity} {source} ORDER BY {order}", args)
+        return array("q", (row[0] for row in rows))
+
+    def discovery_groups(self, query="", offset=0, limit=100, **options) -> list[dict]:
+        source, args, _ = self._discovery_query(query, **options)
+        return [dict(row) for row in self.connection().execute(f"""
+            SELECT mistakes.position, mistakes.played, COUNT(DISTINCT scan_games.game_id) AS source_games,
+                   MIN(games.opening) AS opening, COALESCE(position_frequency.count, 0) AS observed,
+                   (SELECT COALESCE(SUM(count), 0) FROM position_frequency AS all_moves
+                    WHERE all_moves.position=mistakes.position) AS reached
+            {source}
+            GROUP BY mistakes.position, mistakes.played
+            ORDER BY observed DESC, source_games DESC, mistakes.position, mistakes.played
+            LIMIT ? OFFSET ?
+        """, [*args, limit, offset])]
+
+    def group_members(self, position: str, played: str, offset=0, limit=100, **options) -> list[dict]:
+        source, args, _ = self._discovery_query(position=position, played=played, **options)
+        return [dict(row) for row in self.connection().execute(f"""
+            SELECT id, scan_game, ply, white, black, day, speed, probability, maia_elo, state FROM (
+                SELECT mistakes.id, mistakes.scan_game, mistakes.ply, games.white, games.black,
+                       games.day, games.speed, mistakes.probability, mistakes.maia_elo, mistakes.state,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY scan_games.game_id, mistakes.ply
+                           ORDER BY mistakes.probability IS NULL,
+                                    mistakes.state='candidate', scan_games.id DESC
+                       ) AS analysis_rank
+                {source}
+            ) WHERE analysis_rank=1
+            ORDER BY probability DESC, id DESC LIMIT ? OFFSET ?
+        """, [*args, limit, offset])]
 
     def scan_progress(self, scan_id: int) -> dict:
         db = self.connection()

@@ -122,6 +122,8 @@ class EngineDialog(QDialog):
             return
         active = profile["id"] == self.library.setting("active_engine")
         self.active.setEnabled(not busy and not active)
+        blocked = self.library.engine_removal_block(profile["id"])
+        self.remove.setToolTip(blocked)
         values = [
             ("Profile", profile["name"]), ("UCI version", profile["version"]),
             ("Commit date", profile.get("commit_date")), ("Commit SHA", profile.get("commit")),
@@ -129,6 +131,7 @@ class EngineDialog(QDialog):
             ("Architecture", profile["architecture"]), ("Compiler", profile.get("compiler")),
             ("Build mode", profile.get("build_mode")), ("Installed", profile["installed"]),
             ("Executable", profile["path"]), ("SHA-256", profile["sha256"]),
+            ("Removal", blocked),
         ]
         text = "\n".join(f"{name}\n{value}" for name, value in values if value)
         networks = profile.get("networks", [])
@@ -277,6 +280,9 @@ class EngineDialog(QDialog):
     def _remove(self):
         profile = self._profile()
         if profile is None:
+            return
+        if message := self.library.engine_removal_block(profile["id"]):
+            error(self, "Remove engine", message)
             return
         question = "Remove this profile and its managed installation?" if profile.get("managed_directory") else "Remove this profile from Second Look?"
         if profile["id"] == self.library.setting("active_engine"):

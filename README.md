@@ -2,7 +2,7 @@
 
 Second Look is a standalone Windows x64 desktop application for finding chess mistakes in Lichess games. It streams games, records Stockfish analysis in a local SQLite library, and uses Maia 3 79M to rank verified mistakes by how likely a human at the relevant rating was to play them. Open a discovery to see its game, engine lines, and probabilities immediately.
 
-[**Download Second Look v0.1.11 for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.11/SecondLook-windows-x64.zip) · [**Download the Python edition**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.11/SecondLook-Python.zip) · [What changed in v0.1.11](CHANGELOG.md#v0111)
+[**Download Second Look v0.1.12 for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.12/SecondLook-windows-x64.zip) · [**Download the Python edition**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.12/SecondLook-Python.zip) · [What changed in v0.1.12](CHANGELOG.md#v0112)
 
 The Windows release includes the Maia CPU runtime. Extract the whole ZIP, launch SecondLook.exe, then use **Scanner → Download model** to fetch the verified checkpoint.
 
@@ -29,7 +29,7 @@ Install **Python 3.12 x64** with the Python launcher. Install **Git for Windows*
 
 Without the optional Maia runtime, omit `-WithMaia`. Stockfish verification works independently and saves jobs for later Maia inference.
 
-1. In **Engines**, select **Download dev build & activate** or **Select existing executable**.
+1. On first launch, open **Set up Second Look**. In **Engine Manager**, select **Download dev build & activate** or **Select existing executable**.
 2. In **Scanner**, select **Download model** under **Maia 3 · 79M**. The checkpoint is about 301 MiB. Alternatively, use **Choose checkpoint** for an existing copy of the official file.
 3. Choose a source and filters in **Scanner**, then select **Start scan**. The default limit is 250 selected games. Set it to **Unlimited** for an unrestricted scan.
 4. Open a result in **Library → Discoveries**. The default order is highest Maia probability first, then larger Stockfish loss. A dash means a probability is unavailable or pending.
@@ -41,6 +41,7 @@ The library, engine profiles, sources, and model use a separate `LichessMistakeS
 ## Game sources
 
 - **Monthly archives** discover official standard rated PGNs by month. Rating, speed, opening, date, and other game filters are applied locally before Stockfish searches. Enable **Scan a single UTC day** in the archive controls and pick a date to analyze that day. Lichess serves monthly archives, so a daily scan reads the compressed monthly stream and filters by date locally.
+- **Batch several UTC days** lets you add multiple dates and set a game limit per day. Scanner opens each selected month once per batch and ends intake for a month when all its dates reach their quotas or the stream ends. The dashboard shows selected counts for each day. Pausing and reconnecting may replay earlier records while retaining the saved per-day counts.
 - **Lichess API** exports public games by username, game IDs, or supported game URL. Username exports use supported date, rating-status, speed, opponent, color, and count parameters. The same local filters apply. Requests are serial and wait at least one minute after HTTP 429.
 - **Local files** accept multiple `.pgn` and `.pgn.zst` files, including monthly dumps downloaded earlier. The scanner uses standard chess. Missing metadata remains unknown.
 
@@ -54,10 +55,13 @@ The **Source intake** bar tracks reading or downloading games. Stockfish and Mai
 - **Reanalyze** queues a new scan of the saved game with the selected engine and current settings. Both results remain in the library.
 - In **Game score**, White and Black share a numbered row. Click either side to jump to its position. Hover a move or evaluation to see its search depth and finding. Original PGN variations appear underneath their branch points. Click the **evaluation graph** to seek through the game, or use **Previous/Next Moment** to jump between findings.
 - Select any move in the **Game score** and use **Before move** and **After move** to inspect its positions. **Compare move** runs a fresh Stockfish search for the best move, the move played, and the resulting position. The panel shows saved and live evaluations separately with their search depths.
+- **Scan decision** explains the saved result for the selected move, including candidates rejected at verification. New scans also save the reason when a move is screened out. Older scans can show a verification decision where one was saved.
 - Verified moments also show stored Stockfish lines, acceptable moves, and Maia probabilities. Hover a line to open a miniature board. Keep the pointer over the line and scroll down to advance or up to go back. Click a line to play it on the main board and use Left/Right to step through it. **Main line** returns to the game.
 - Saved game clocks appear above and below the board when reviewing games. A dash marks an unavailable recorded time. Scroll down over the main board to step forward or up to go back. Click or drag a piece for a legal side variation. Right-drag draws an arrow. The evaluation bar and graph use White's perspective. At smaller window sizes, the panels move into scrollable tabs beside the board. The **View** menu controls dockable panels.
 - **All Maia moves** shows the full legal-move distribution. **Position occurrences** shows empirical counts from analyzed games and links to their source positions. Bookmarks and the last selected position are saved.
 - **Library** filters both Games and Discoveries by time category and exact time control. Pick a duration already in the library, such as **15 min + 10 sec**, or type its PGN value, such as `900+10`.
+- In **Discoveries**, enable **Group by position and move** to see how often the move was played out of all recorded occurrences of the position in the library. Open a group to see its matching source games and their individual Maia probabilities.
+- Select **Review filtered results** from Games or Discoveries to open the first match in the current sort order. Use **Mark reviewed & next** to save your result and continue across games.
 - **Export** on an analysis supports original or annotated PGN, FEN, CSV, JSON, and puzzle positions with solutions. The library can export selected items or a filtered collection. Annotated PGN includes compatible evaluation comments, continuations, and engine identity.
 
 ## Search behavior
@@ -71,6 +75,8 @@ Verification defaults to depth 20 and MultiPV 5 on both sides of a candidate. It
 One shared CPU Maia process predicts only the positions involved in verified mistakes. Both rating inputs use the lower original player rating rounded to the nearest 200 (halfway values round up, clamped to 600–3000). Predictions use up to eight positions from the original game history. If either player has no rating, the game retains its Stockfish results and the probability stays unavailable. Maia probabilities are model estimates. Observed move counts come from the local sample and are displayed separately.
 
 ## Stockfish Engine Manager
+
+**Setup & storage** shows Stockfish and Maia readiness and the disk size of managed engine files, the archive cache, the library, and the Maia checkpoint. Use it to open their folders or reach the engine and model setup actions. Engine Manager names the unfinished scans that need a build when removal is blocked.
 
 **Check for updates** shows the release commit and date alongside installed development revisions. **Download dev build & activate** resolves the upstream prerelease to a full Git commit, verifies the published GitHub SHA-256, checks the Windows x64 executable in the ZIP, and validates a real UCI search. Separate profile directories retain old versions, and a verified existing installation can be reused. **Remove engine** also accepts the active profile once its unfinished Stockfish work is complete. Removing a managed profile frees its installation space and keeps saved analysis. Changing engines applies to newly created scans. Each saved scan retains its original engine fingerprint, NNUE configuration, and search settings.
 

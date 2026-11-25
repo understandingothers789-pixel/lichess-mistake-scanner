@@ -39,6 +39,18 @@ def loss(best: Score, played: Score, rules: SearchSettings) -> tuple[str, int | 
     return ("Evaluation loss", change) if change >= rules.loss_cp else None
 
 
+def retained_outcome(best: Score, played: Score, rules: SearchSettings) -> tuple[str, int | None]:
+    """Explain a comparison that did not pass the loss rule."""
+    if best.mate is not None or played.mate is not None:
+        return "mate", None
+    if best.cp is None or played.cp is None:
+        return "unknown", None
+    change = best.cp - played.cp
+    same_win = min(best.cp, played.cp) >= rules.decisive_cp
+    same_loss = max(best.cp, played.cp) <= -rules.decisive_cp
+    return ("decisive" if same_win or same_loss else "threshold"), change
+
+
 def decisive_side(score: Score, threshold: int) -> int:
     if score.mate is not None:
         return score.winner
@@ -189,7 +201,7 @@ def verify_engine_files(profile: dict) -> None:
             raise ValueError(f"An NNUE file changed: {network['path']}")
 
 
-def discover(game: dict, rules: SearchSettings, search) -> tuple[list, list, list]:
+def discover(game: dict, rules: SearchSettings, search, *, decisions=None) -> tuple[list, list, list]:
     board = chess.Board(game["root"])
     adaptive = AdaptiveDepth(rules)
     traces, candidates, occurrences = [], [], []
@@ -222,13 +234,26 @@ def discover(game: dict, rules: SearchSettings, search) -> tuple[list, list, lis
         if ply == 1:
             traces.append((0, asdict(best.score), best.depth))
         traces.append((ply, asdict(post.score), post.depth))
-        if eligible and best.pv and best.pv[0] != actual:
+        decision_depth = best.depth
+        if not eligible:
+            decision = ("start", None)
+        elif not best.pv:
+            decision = ("terminal", None)
+        elif best.pv[0] == actual:
+            decision = ("best", None)
+        else:
             estimate = post.score.for_turn(moving)
             if estimate.mate is not None and estimate.winner == 1:
                 estimate = Score(mate=estimate.mate + 1, winner=1)
-            if loss(best.score.for_turn(moving), estimate, rules):
+            best_score = best.score.for_turn(moving)
+            code, change = retained_outcome(best_score, estimate, rules)
+            decision = (f"screen_{code}", change)
+            if loss(best_score, estimate, rules):
                 played = search(board, depth, move=actual)[0]
-                found = loss(best.score.for_turn(moving), played.score.for_turn(moving), rules)
+                decision_depth = played.depth
+                played_score = played.score.for_turn(moving)
+                found = loss(best_score, played_score, rules)
+                decision = retained_outcome(best_score, played_score, rules) if found is None else None
                 if found:
                     candidates.append({
                         "ply": ply, "position": prior_key, "played": actual,
@@ -236,6 +261,8 @@ def discover(game: dict, rules: SearchSettings, search) -> tuple[list, list, lis
                         "discovery_best": best.dump(), "discovery_played": played.dump(),
                         "clock": game["clocks"][ply - 1],
                     })
+        if decisions is not None and decision is not None:
+            decisions[ply] = (*decision, decision_depth)
 
         adaptive.observe(post.score)
         previous = initial_post
@@ -333,6 +360,8 @@ def analyse_critical(
         "verified": found is not None,
         "reason": found[0] if found else "Rejected by deeper search",
         "loss_cp": found[1] if found else None,
+        "rejection": retained_outcome(best.score.for_turn(before.turn), actual.score.for_turn(before.turn), rules)
+        if found is None else None,
         "before_key": before_key, "after_key": after_key,
         "best": best.pv[0], "actual": actual.dump(),
         "good_before": good_before, "good_after": good_after,

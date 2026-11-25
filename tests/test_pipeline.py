@@ -1,11 +1,14 @@
+import hashlib
+from io import StringIO
 from pathlib import Path
 from time import monotonic, sleep
 
 import chess
 import httpx
 import pytest
+import zstandard
 
-from mistake_scanner.acquisition import records
+from mistake_scanner.acquisition import archive_sources, records
 from mistake_scanner.database import Library
 from mistake_scanner.engines import inspect_engine
 from mistake_scanner.exports import annotated_pgn, moment_data, write_export
@@ -125,6 +128,51 @@ def test_api_replay_after_transport_error_does_not_duplicate_jobs(tmp_path, fake
         runner.close()
 
 
+@pytest.mark.parametrize("resuming", [False, True])
+def test_archive_batch_streams_selected_days_with_independent_quotas(tmp_path, fake_profile, resuming):
+    data = SAMPLE + SAMPLE.replace("AbcD1234", "same1234")
+    data += SAMPLE.replace("AbcD1234", "skip1234").replace("2025.01.20", "2025.01.21")
+    data += SAMPLE.replace("AbcD1234", "next1234").replace("2025.01.20", "2025.01.22")
+    data += SAMPLE.replace("AbcD1234", "late1234").replace("2025.01.20", "2025.01.22")
+    body = zstandard.ZstdCompressor().compress(data.encode())
+    calls = []
+    filename = "lichess_db_standard_rated_2025-01.pgn.zst"
+
+    def respond(request):
+        if request.url.path == "/":
+            return httpx.Response(200, text=f"{filename} lichess_db_standard_rated_2025-02.pgn.zst")
+        if request.url.path.endswith("sha256sums.txt"):
+            return httpx.Response(200, text=f"{hashlib.sha256(body).hexdigest()}  {filename}")
+        calls.append(request.url.path)
+        return httpx.Response(200, content=body)
+
+    def network(**_):
+        return Network(httpx.Client(transport=httpx.MockTransport(respond)), wait=lambda _: None)
+
+    library = Library(tmp_path / "library.sqlite3")
+    rules = SearchSettings(workers=1)
+    plan = network()
+    try:
+        sources = archive_sources(plan, "2025-01", "2025-02", days=("2025-01-22", "2025-01-20"), daily_limit=1)
+    finally:
+        plan.close()
+    assert len(sources) == 1
+    identity = library.create_scan("Two UTC days", sources, GameFilter(), rules, fake_profile, 0)
+    if resuming:
+        first = next(records(StringIO(SAMPLE), GameFilter()))[1]
+        library.import_game(library.ready_source()["id"], identity, first, 1)
+    runner = Runner(library, rules, network_factory=network, engine_factory=ScriptedStockfish)
+    try:
+        library.set_state(identity, "running")
+        wait_for(lambda: library.scan_progress(identity)["sources"][0]["state"] == "done")
+        wait_for(lambda: library.scan(identity)["analyzed"] == 2)
+        assert calls == [f"/standard/{filename}"]
+        assert library.scan_day_counts(identity) == {"2025-01-20": 1, "2025-01-22": 1}
+        assert library.scan_progress(identity)["sources"][0]["seen"] == 4
+    finally:
+        runner.close()
+
+
 def test_scans_keep_engine_snapshot_and_removal_protects_jobs(tmp_path, fake_profile, pgn):
     library = Library(tmp_path / "library.sqlite3")
     library.save_engine(fake_profile)
@@ -142,6 +190,7 @@ def test_scans_keep_engine_snapshot_and_removal_protects_jobs(tmp_path, fake_pro
     assert library.scan(second_id)["profile"]["id"] == second["id"]
     with pytest.raises(ValueError, match="unfinished"):
         library.delete_engine(fake_profile["id"])
+    assert f"#{first_id} One (running)" in library.engine_removal_block(fake_profile["id"])
 
     engines = []
 
@@ -166,6 +215,10 @@ def test_scans_keep_engine_snapshot_and_removal_protects_jobs(tmp_path, fake_pro
             library.finish_maia(dict(job), f"before-{scan_id}", f"after-{scan_id}", probability)
         assert [m["id"] for m in library.discovery_page()] == [latest["id"], earlier["id"]]
         assert library.frequency(earlier["position"])[earlier["played"]] == 1
+        group, = library.discovery_groups(speed="rapid")
+        assert (group["observed"], group["reached"], group["source_games"]) == (1, 1, 1)
+        member, = library.group_members(group["position"], group["played"], speed="rapid")
+        assert member["id"] == latest["id"] and member["probability"] == 0.61
     finally:
         runner.close()
 

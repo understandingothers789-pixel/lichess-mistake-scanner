@@ -16,6 +16,7 @@ from mistake_scanner.database import Library
 from mistake_scanner.gui import Window
 from mistake_scanner.model import SearchSettings
 from mistake_scanner.ui.theme import style_application
+from conftest import SAMPLE
 from test_pipeline import ScriptedStockfish
 
 
@@ -54,6 +55,14 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         assert scanner.archive_day.isVisible() and not scanner.since.isVisible()
         scanner.single_day.setChecked(False)
         assert scanner.first_month.isVisible() and scanner.since.isVisible() and not scanner.archive_day.isVisible()
+        scanner.day_batch.setChecked(True)
+        assert scanner.batch_dates.isVisible() and scanner.daily_limit.isVisible() and not scanner.game_limit.isVisible()
+        assert not scanner.first_month.isVisible() and not scanner.since.isVisible()
+        scanner._add_batch_day()
+        assert scanner.batch_dates.text() == scanner.archive_day.date().toString("yyyy-MM-dd")
+        scanner.single_day.setChecked(True)
+        assert not scanner.day_batch.isChecked() and not scanner.batch_dates.isVisible() and scanner.game_limit.isVisible()
+        scanner.single_day.setChecked(False)
         window.scanner.source.setCurrentIndex(2)
         window.scanner.files = [str(pgn)]
         window.scanner.game_limit.setValue(1)
@@ -76,6 +85,7 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         assert review.line_table.rowCount() == 5
         assert review.line_table.item(0, 3).text() == "d20"
         assert "Played Nf6" in review.summary.text()
+        assert "Verified at d20" in review.scan_decision.text()
         assert review.moves.topLevelItemCount() == 5
 
         move_row, black_column = review.score_items[6]
@@ -86,6 +96,7 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         assert review.ply == 5 and review.move_ply == 5 and review.current is None
         assert review.position_label.text() == "3. Qh5"
         assert "Saved scan" in review.scan_scores.text()
+        assert "Discovery screen at d12" in review.scan_decision.text()
         QTest.mouseClick(review.before, Qt.MouseButton.LeftButton)
         assert review.ply == 4 and review.move_ply == 5
         QTest.mouseClick(review.compare_button, Qt.MouseButton.LeftButton)
@@ -199,6 +210,65 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         assert browser.time_filter.currentText() == "10 min + 5 sec"
         assert {row["speed"] for row in browser.rows} == {"rapid"}
 
+    finally:
+        window.close()
+        pump(app, lambda: not window.isVisible())
+
+
+def test_first_run_storage_and_filtered_review_across_games(tmp_path, pgn, fake_profile):
+    app = QApplication.instance() or QApplication([])
+    style_application(app)
+    window = Window(tmp_path)
+    window.runner.pool.factory = ScriptedStockfish
+    window.show()
+    try:
+        assert window.review.scan_button.text() == "Set up Second Look"
+        window.review.scan_button.click()
+        pump(app, lambda: window.setup_dialog.task is None)
+        setup = window.setup_dialog
+        assert "Select or install" in setup.statuses["Stockfish"].text()
+        assert setup.sizes["Analysis library"].text() != "Measuring…"
+        assert setup.sizes["Archive cache"].text() == "0 B"
+        assert not setup.validate.isEnabled()
+        setup.accept()
+        app.processEvents()
+
+        window.library.save_engine(fake_profile)
+        window.library.set_setting("active_engine", fake_profile["id"])
+        window.refresh_engine()
+        assert window.review.scan_button.text() == "Start a scan"
+        pgn.write_text(SAMPLE + SAMPLE.replace("AbcD1234", "seqG1234").replace("ExampleWhite", "OtherWhite"),
+                       encoding="utf-8")
+        window.show_page(2)
+        window.scanner.source.setCurrentIndex(2)
+        window.scanner.files = [str(pgn)]
+        window.scanner.start_button.click()
+        pump(app, lambda: len(window.library.discovery_page()) == 2)
+
+        window.show_page(1)
+        browser = window.browser
+        browser.grouped.setChecked(True)
+        pump(app, lambda: browser.fetch is None and browser.group_table.rowCount() == 1)
+        assert browser.group_table.item(0, 2).text() == "2 of 2"
+        browser.open.click()
+        pump(app, lambda: browser.fetch is None and browser.member_table.rowCount() == 2)
+        assert {browser.member_table.item(i, 0).text() for i in range(2)} == {"ExampleWhite", "OtherWhite"}
+        assert {browser.member_table.item(i, 4).text() for i in range(2)} == {"—"}
+        browser.grouped.setChecked(False)
+        browser.review.setCurrentIndex(browser.review.findData("unreviewed"))
+        pump(app, lambda: browser.fetch is None and browser.review_filtered.isEnabled())
+        expected = list(window.library.review_ids("moments", {"review": "unreviewed"}))
+        browser.review_filtered.click()
+        pump(app, lambda: window.review.review_bar.isVisible())
+        review = window.review
+        assert review.current["id"] == expected[0] and review.review_progress.text() == "Finding 1 of 2"
+        first_game = review.game["scan_game"]
+        review.mark_next.click()
+        assert review.current["id"] == expected[1] and review.game["scan_game"] != first_game
+        assert window.library.mistake(expected[0])["reviewed"]
+        review.mark_next.click()
+        assert not review.review_bar.isVisible() and window.library.mistake(expected[1])["reviewed"]
+        assert not window.library.review_ids("moments", {"review": "unreviewed"})
     finally:
         window.close()
         pump(app, lambda: not window.isVisible())

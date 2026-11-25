@@ -1,5 +1,13 @@
 # What changed
 
+## v0.1.12
+
+- See the saved scan decision for a move, including the depth, loss threshold, and reason a candidate was rejected.
+- Batch several UTC days with independent game quotas and per-day progress in a single pass through each selected month.
+- Group discoveries by position and played move, then open the source games to see their own Maia predictions.
+- Review a filtered list across games and mark each finding or game reviewed from the analysis board.
+- Open setup and storage from the toolbar or first launch. See readiness, disk use, and the scans that need an engine build.
+
 ## v0.1.11
 
 - Smaller Analysis windows keep the board large and put Stockfish, the game score, findings, and the graph in side tabs.

@@ -15,6 +15,7 @@ from .ui.engine_view import EngineDialog
 from .ui.library_view import LibraryView
 from .ui.review import Review
 from .ui.scanner_view import ScannerView
+from .ui.setup_view import SetupDialog
 from .ui.theme import Task, button, error, label, style_application
 
 
@@ -27,6 +28,10 @@ class Window(QMainWindow):
         checkpoint = Path(self.library.setting("maia_checkpoint", str(root / "models" / CHECKPOINT_NAME)))
         self.runner = Runner(self.library, rules, checkpoint)
         self.dialog = None
+        self.setup_dialog = None
+        self.review_ids = ()
+        self.review_kind = ""
+        self.review_index = 0
         self.shutdown = None
         self.allowed_to_close = False
         self.close_requested = False
@@ -61,6 +66,7 @@ class Window(QMainWindow):
         self.engine_status = label("", "label")
         top.addWidget(self.engine_status)
         top.addWidget(button("Engines", self.engines))
+        top.addWidget(button("Setup && storage", self.setup))
         layout.addWidget(toolbar)
 
         self.pages = QStackedWidget()
@@ -72,8 +78,12 @@ class Window(QMainWindow):
             self.pages.addWidget(page)
             page.info.connect(self.show_status)
         self.review.open_library.connect(lambda: self.show_page(1))
-        self.review.open_scanner.connect(lambda: self.show_page(2))
+        self.review.open_scanner.connect(self._start_from_analysis)
         self.browser.opened.connect(self.open_game)
+        self.browser.review_requested.connect(self._begin_review)
+        self.review.review_next.connect(self._mark_reviewed_next)
+        self.review.review_stop.connect(self._stop_review)
+        self.review.position_opened.connect(self._open_position)
         self.review.reanalyze.connect(self.reanalyze_game)
         self.scanner.request_engines.connect(self.engines)
 
@@ -132,9 +142,49 @@ class Window(QMainWindow):
             self.review.refresh()
 
     def open_game(self, scan_game: int, moment: int | None):
-        self.review.load(scan_game, moment)
+        self._stop_review()
+        self._show_game(scan_game, moment)
+
+    def _open_position(self, scan_game: int, ply: int):
+        self._stop_review()
+        self._show_game(scan_game, ply=ply)
+
+    def _show_game(self, scan_game: int, moment=None, *, ply=None):
+        self.review.load(scan_game, moment, ply=ply)
         self.library.set_setting("last_game", scan_game)
         self.show_page(0)
+
+    def _begin_review(self, kind, identities):
+        if not identities:
+            self.show_status("No results match these review filters.")
+            return
+        self.review_ids, self.review_kind, self.review_index = identities, kind, 0
+        self._show_review_item()
+
+    def _show_review_item(self):
+        game = self.review_kind == "games"
+        while self.review_index < len(self.review_ids):
+            identity = self.review_ids[self.review_index]
+            item = self.library.game(identity) if game else self.library.mistake(identity)
+            if item:
+                self._show_game(item["scan_game"], None if game else identity)
+                self.review.set_review_progress(self.review_index + 1, len(self.review_ids), is_game=game)
+                return
+            self.review_index += 1
+        self._stop_review()
+        self.show_status("Filtered review complete.")
+
+    def _mark_reviewed_next(self):
+        if self.review_ids:
+            identity = self.review_ids[self.review_index]
+            self.library.review(identity, game=self.review_kind == "games", reviewed=True)
+            self.review_index += 1
+            self._show_review_item()
+            self.review.refresh()
+
+    def _stop_review(self):
+        self.review_ids = ()
+        self.review.set_review_progress()
 
     def reanalyze_game(self, scan_game: int):
         profile = self.library.engine(self.library.setting("active_engine"))
@@ -154,8 +204,37 @@ class Window(QMainWindow):
         selected = self.library.engine(self.library.setting("active_engine"))
         self.engine_status.setText(selected["name"] if selected else "No engine selected")
         self.engine_status.setToolTip(selected.get("commit") or selected["path"] if selected else "Open Engine Manager to select Stockfish")
+        self.review.scan_button.setText("Start a scan" if selected else "Set up Second Look")
         if self.review.live_button.isChecked():
             self.review._render()
+
+    def _start_from_analysis(self):
+        if self.library.engine(self.library.setting("active_engine")):
+            self.show_page(2)
+        else:
+            self.setup()
+
+    def setup(self):
+        if self.setup_dialog is None:
+            location = self.scanner.cache_location.text().strip()
+            self.setup_dialog = SetupDialog(self.library, self.runner, self.root,
+                                            Path(location) if location else self.root / "cache", self)
+            self.setup_dialog.manage_engines.connect(self.engines)
+            self.setup_dialog.validate_engine.connect(lambda: self.engines().validate.click())
+            self.setup_dialog.setup_maia.connect(self._setup_maia)
+            self.setup_dialog.finished.connect(self._setup_closed)
+            self.setup_dialog.open()
+        else:
+            self.setup_dialog.raise_()
+            self.setup_dialog.activateWindow()
+
+    def _setup_closed(self):
+        self.setup_dialog.deleteLater()
+        self.setup_dialog = None
+
+    def _setup_maia(self, download):
+        self.show_page(2)
+        (self.scanner.download_model if download else self.scanner.choose_model).click()
 
     def engines(self):
         if self.dialog is None:
@@ -166,6 +245,7 @@ class Window(QMainWindow):
         else:
             self.dialog.raise_()
             self.dialog.activateWindow()
+        return self.dialog
 
     def _engine_closed(self):
         self.dialog.deleteLater()

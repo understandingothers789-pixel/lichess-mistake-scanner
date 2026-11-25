@@ -35,11 +35,22 @@ def archive_months(network: Network) -> list[str]:
 def archive_sources(
     network: Network, first: str, last: str, *, cache: Path | None = None,
     limit_bytes: int = 100 * 1024 ** 3, delete_after: bool = False,
+    days: tuple[str, ...] = (), daily_limit: int = 0,
 ) -> list[Source]:
     start, end = date.fromisoformat(first + "-01"), date.fromisoformat(last + "-01")
     if start > end:
         raise ValueError("First archive month is after the last month.")
     months = [m for m in reversed(archive_months(network)) if first <= m <= last]
+    days_by_month: dict[str, list[str]] = {}
+    for day in sorted({date.fromisoformat(day).isoformat() for day in days}):
+        days_by_month.setdefault(day[:7], []).append(day)
+    if days_by_month:
+        missing = sorted(days_by_month.keys() - set(months))
+        if missing:
+            raise ValueError(f"No public archive is available for {', '.join(missing)}.")
+        if daily_limit < 1:
+            raise ValueError("Choose a positive game limit per day.")
+        months = [month for month in months if month in days_by_month]
     if not months:
         raise ValueError("No public standard-game archives match those months.")
     try:
@@ -61,6 +72,8 @@ def archive_sources(
             raise IntegrityError(f"No official checksum is available for {month}. Try streaming this archive.")
         kind = "archive_cache" if cache is not None else "archive_stream"
         params = {"month": month, "sha256": expected}
+        if days_by_month:
+            params.update(days=days_by_month[month], daily_limit=daily_limit)
         if cache is not None:
             params.update(cache=str(cache.expanduser().resolve() / "lichess-monthly"),
                           limit_bytes=limit_bytes, delete_after=delete_after)
@@ -321,7 +334,8 @@ class RecordReader:
         return line
 
 
-def records(text, filters: GameFilter, start: int = 0, check=lambda: None, *, remote=False, known_rated=None):
+def records(text, filters: GameFilter, start: int = 0, check=lambda: None, *, remote=False, known_rated=None,
+            days: set[str] | None = None):
     """Yield a record index and outcome for every complete imported PGN."""
     reader = RecordReader(text, check)
     index = 0
@@ -335,8 +349,10 @@ def records(text, filters: GameFilter, start: int = 0, check=lambda: None, *, re
                 self.reason = "replay"
             elif self.game.headers.get("Variant", "standard").lower() not in STANDARD:
                 self.reason = "variant"
-            elif not matches(metadata(self.game.headers, known_rated), filters):
-                self.reason = "filtered"
+            else:
+                meta = metadata(self.game.headers, known_rated)
+                if (days is not None and meta["day"] not in days) or not matches(meta, filters):
+                    self.reason = "filtered"
             if self.reason:
                 reader.reset(False)
                 return chess.pgn.SKIP
