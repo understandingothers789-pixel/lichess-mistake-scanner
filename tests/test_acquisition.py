@@ -133,3 +133,17 @@ def test_lichess_tournament_tags_and_authoritative_rated_filter():
     assert list(records(io.StringIO(named_event), filters, remote=True))[0][2] == "filtered"
     assert list(records(io.StringIO(named_event), filters, remote=True, known_rated=True))[0][1]["rated"]
     assert list(records(io.StringIO(rated_event), filters, remote=True))[0][1]["rated"]
+
+
+def test_utc_window_matches_game_start_with_exclusive_end():
+    stamps = ("00:14:59", "00:15:00", "00:29:59", "00:30:00", None)
+    games = [
+        SAMPLE.replace('[UTCDate "2025.01.20"]',
+                       f'[UTCDate "2025.01.20"]\n[UTCTime "{stamp}"]') if stamp else SAMPLE
+        for stamp in stamps
+    ]
+    rows = records(io.StringIO("".join(games)), GameFilter(utc_start="00:15", utc_end="00:30"))
+    assert [game["utc_time"] for _, game, _ in rows if game] == ["00:15:00", "00:29:59"]
+    assert GameFilter(utc_start="23:59", utc_end="24:00")
+    with pytest.raises(ValueError, match="later"):
+        GameFilter(utc_start="23:00", utc_end="01:00")

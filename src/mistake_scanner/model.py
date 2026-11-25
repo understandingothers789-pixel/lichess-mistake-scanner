@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,8 @@ class GameFilter:
     eco: str = ""
     username: str = ""
     clocks: bool = False
+    utc_start: str = ""
+    utc_end: str = ""
 
     def __post_init__(self) -> None:
         from datetime import date
@@ -85,6 +88,12 @@ class GameFilter:
                 date.fromisoformat(value)
         if self.since and self.until and self.since > self.until:
             raise ValueError("Start date is after end date.")
+        if self.utc_start or self.utc_end:
+            clock = r"(?:[01][0-9]|2[0-3]):[0-5][0-9]"
+            if not re.fullmatch(clock, self.utc_start) or not re.fullmatch(clock + "|24:00", self.utc_end):
+                raise ValueError("Enter both UTC times as HH:MM. Use 24:00 for the end of the day.")
+            if self.utc_start >= self.utc_end:
+                raise ValueError("The UTC end time must be later than the start time on the same date.")
         if any(speed not in SPEEDS for speed in self.speeds):
             raise ValueError("Unsupported time-control category.")
 

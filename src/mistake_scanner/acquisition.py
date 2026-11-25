@@ -301,6 +301,12 @@ def matches(meta: dict, filters: GameFilter) -> bool:
         return False
     if filters.until and (not meta["day"] or meta["day"] > filters.until):
         return False
+    if filters.utc_start:
+        started = meta.get("utc_time") or ""
+        if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?", started):
+            return False
+        if not filters.utc_start <= started[:5] < filters.utc_end:
+            return False
     if filters.opening and filters.opening.casefold() not in (meta["opening"] or "").casefold():
         return False
     if filters.username and filters.username.casefold() not in [(meta[name] or "").casefold() for name in ("white", "black")]:

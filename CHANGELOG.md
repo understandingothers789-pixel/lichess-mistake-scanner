@@ -1,5 +1,9 @@
 # What changed
 
+## v0.1.13
+
+- Filter single-day scans and date batches by a UTC game-start window with minute precision.
+
 ## v0.1.12
 
 - See the saved scan decision for a move, including the depth, loss threshold, and reason a candidate was rejected.

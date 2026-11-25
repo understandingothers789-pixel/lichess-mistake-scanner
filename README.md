@@ -2,7 +2,7 @@
 
 Second Look is a standalone Windows x64 desktop application for finding chess mistakes in Lichess games. It streams games, records Stockfish analysis in a local SQLite library, and uses Maia 3 79M to rank verified mistakes by how likely a human at the relevant rating was to play them. Open a discovery to see its game, engine lines, and probabilities immediately.
 
-[**Download Second Look v0.1.12 for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.12/SecondLook-windows-x64.zip) · [**Download the Python edition**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.12/SecondLook-Python.zip) · [What changed in v0.1.12](CHANGELOG.md#v0112)
+[**Download Second Look v0.1.13 for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.13/SecondLook-windows-x64.zip) · [**Download the Python edition**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.13/SecondLook-Python.zip) · [What changed in v0.1.13](CHANGELOG.md#v0113)
 
 The Windows release includes the Maia CPU runtime. Extract the whole ZIP, launch SecondLook.exe, then use **Scanner → Download model** to fetch the verified checkpoint.
 
@@ -42,6 +42,7 @@ The library, engine profiles, sources, and model use a separate `LichessMistakeS
 
 - **Monthly archives** discover official standard rated PGNs by month. Rating, speed, opening, date, and other game filters are applied locally before Stockfish searches. Enable **Scan a single UTC day** in the archive controls and pick a date to analyze that day. Lichess serves monthly archives, so a daily scan reads the compressed monthly stream and filters by date locally.
 - **Batch several UTC days** lets you add multiple dates and set a game limit per day. Scanner opens each selected month once per batch and ends intake for a month when all its dates reach their quotas or the stream ends. The dashboard shows selected counts for each day. Pausing and reconnecting may replay earlier records while retaining the saved per-day counts.
+- For either date mode, enter an optional **UTC start time** window in `HH:MM`. For example, October 1 with `00:00` to `01:00` selects game starts in the first hour of that date. A batch uses the same window on each selected date. The end time is exclusive, and `24:00` includes the final minute. Games need a recorded UTC start time when this filter is active.
 - **Lichess API** exports public games by username, game IDs, or supported game URL. Username exports use supported date, rating-status, speed, opponent, color, and count parameters. The same local filters apply. Requests are serial and wait at least one minute after HTTP 429.
 - **Local files** accept multiple `.pgn` and `.pgn.zst` files, including monthly dumps downloaded earlier. The scanner uses standard chess. Missing metadata remains unknown.
 

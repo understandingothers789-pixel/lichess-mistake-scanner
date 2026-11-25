@@ -150,6 +150,19 @@ class ScannerView(QWidget):
         self.daily_limit = spin(250, 1, 100_000_000)
         archive_form.addRow("Games per day", self.daily_limit)
 
+        time_row = archive_form.rowCount()
+        self.utc_start = self._field("00:00")
+        self.utc_end = self._field("24:00")
+        utc_window = QHBoxLayout()
+        utc_window.addWidget(self.utc_start)
+        utc_window.addWidget(label("to", "muted"))
+        utc_window.addWidget(self.utc_end)
+        archive_form.addRow("UTC start time", utc_window)
+        time_help_row = archive_form.rowCount()
+        archive_form.addRow(label("Optional HH:MM window for each selected date. End time is exclusive.", "muted", wrap=True))
+        self.utc_start.setAccessibleName("Earliest UTC game start time")
+        self.utc_end.setAccessibleName("Exclusive UTC game start cutoff")
+
         def show_days():
             batch = self.day_batch.isChecked()
             dated = self.single_day.isChecked() or batch
@@ -158,6 +171,8 @@ class ScannerView(QWidget):
             archive_form.setRowVisible(day_row, dated)
             archive_form.setRowVisible(date_list_row, batch)
             archive_form.setRowVisible(self.daily_limit, batch)
+            archive_form.setRowVisible(time_row, dated)
+            archive_form.setRowVisible(time_help_row, dated)
 
         def toggle_days(checked, other):
             if checked:
@@ -466,12 +481,18 @@ class ScannerView(QWidget):
                     days = tuple(sorted({date.fromisoformat(token).isoformat() for token in tokens}))
                 except ValueError as exc:
                     raise ValueError("Enter the batch dates as YYYY-MM-DD.") from exc
+            start, end = "", ""
+            if day or days:
+                start, end = self.utc_start.text().strip(), self.utc_end.text().strip()
+                if start or end:
+                    start, end = start or "00:00", end or "24:00"
             filters = GameFilter(
                 self.rating_min.value() or None, self.rating_max.value() or None, self.rating_mode.currentData(),
                 tuple(name for name, box in self.speeds.items() if box.isChecked()), self.rated.currentData(),
                 self.tc.text().strip(), days[0] if days else day or self.since.text().strip(),
                 days[-1] if days else day or self.until.text().strip(), self.opening.text().strip(),
                 self.eco.text().strip(), self.user.text().strip(), self.clocks.isChecked(),
+                utc_start=start, utc_end=end,
             )
             rules, limit = self.rules, 0 if days else self.game_limit.value()
 
@@ -505,6 +526,8 @@ class ScannerView(QWidget):
 
                 self.info.emit("Checking Lichess's archive list and official checksums…")
                 title = f"{len(days)} UTC days" if days else day or (first if first == last else f"{first}–{last}")
+                if start:
+                    title += f" · {start}–{end} UTC"
                 self._launch(planned, lambda value: create(value, title), "Start archive scan")
             elif source == "api":
                 mode, value = self.api_mode.currentData(), self.api_value.text().strip()
