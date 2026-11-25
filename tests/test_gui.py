@@ -43,6 +43,17 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
     try:
         window.show_page(2)
         assert str(tmp_path / "models" / "maia3-79m.pt") in window.scanner.model_location.text()
+        scanner = window.scanner
+        assert scanner.first_month.isVisible() and not scanner.archive_day.isVisible()
+        scanner.single_day.setChecked(True)
+        assert scanner.archive_day.isVisible() and not scanner.first_month.isVisible() and not scanner.last_month.isVisible()
+        assert not scanner.since.isVisible() and not scanner.until.isVisible()
+        scanner.source.setCurrentIndex(1)
+        assert scanner.since.isVisible() and scanner.until.isVisible()
+        scanner.source.setCurrentIndex(0)
+        assert scanner.archive_day.isVisible() and not scanner.since.isVisible()
+        scanner.single_day.setChecked(False)
+        assert scanner.first_month.isVisible() and scanner.since.isVisible() and not scanner.archive_day.isVisible()
         window.scanner.source.setCurrentIndex(2)
         window.scanner.files = [str(pgn)]
         window.scanner.game_limit.setValue(1)
@@ -50,6 +61,10 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         window.show_page(1)
         assert window.pages.currentIndex() == 1
         pump(app, lambda: bool(window.library.discovery_page()))
+        scanner.refresh()
+        assert scanner.stockfish_status.text().startswith("Stockfish · Complete")
+        assert scanner.maia_progress.text().startswith("Maia · Waiting for checkpoint setup")
+        assert scanner.transfer_label.text().startswith("Source intake")
         found = window.library.discovery_page()[0]
         window.browser.refresh(force=True)
         pump(app, lambda: window.browser.open.isEnabled())
@@ -68,7 +83,22 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         review._score_clicked(move_row, black_column)
         assert review.ply == 6
         review._score_clicked(move_row, 1)
-        assert review.ply == 5
+        assert review.ply == 5 and review.move_ply == 5 and review.current is None
+        assert review.position_label.text() == "3. Qh5"
+        assert "Saved scan" in review.scan_scores.text()
+        QTest.mouseClick(review.before, Qt.MouseButton.LeftButton)
+        assert review.ply == 4 and review.move_ply == 5
+        QTest.mouseClick(review.compare_button, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(review.after, Qt.MouseButton.LeftButton)
+        assert review.ply == 5 and review.move_ply == 5 and review.current is None
+        pump(app, lambda: review.comparison is not None)
+        assert "Played Qh5 +0.00 (d20)" in review.comparison_status.text()
+        assert review.comparison_status.text().startswith("Live Stockfish")
+        assert review.lines_board.peek() == chess.Move.from_uci("d1h5")
+        assert "Live Stockfish" in review.line_table.item(0, 1).toolTip()
+        assert len(window.library.discovery_page()) == 1
+        review._moment_clicked(0, 0)
+        assert review.comparison is None and review.ply == 5
         QTest.mouseClick(review.after, Qt.MouseButton.LeftButton)
         assert review.ply == 6 and review.board.board.peek() == chess.Move.from_uci("g8f6")
         assert review.line_table.item(0, 0).text().startswith("Qxf7")
@@ -126,6 +156,16 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
             QApplication.sendEvent(board, wheel)
             assert review.ply == expected_ply
 
+        window.resize(1000, 720)
+        pump(app, lambda: review.compact)
+        assert review.board._geometry()[0].width() >= 340
+        assert set(review.workspace.tabifiedDockWidgets(review.engine_dock)) == {
+            review.score_dock, review.moment_dock, review.chart_dock,
+        }
+        window.resize(1420, 930)
+        pump(app, lambda: not review.compact)
+        assert not review.workspace.tabifiedDockWidgets(review.engine_dock)
+
         window.engines()
         assert window.dialog.table.rowCount() == 1
         assert fake_profile["commit"] in window.dialog.details.toPlainText()
@@ -147,14 +187,16 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         assert not browser.rows
         browser.speed_filter.setCurrentIndex(browser.speed_filter.findData("rapid"))
         pump(app, lambda: browser.fetch is None and len(browser.rows) == 2)
-        browser.time_filter.setText("900+10")
+        browser.time_filter.setEditText("900+10")
         browser._changed()
         pump(app, lambda: browser.fetch is None)
         assert not browser.rows
         browser.tabs.setCurrentIndex(0)
-        browser.time_filter.setText("600+5")
-        browser._changed()
+        exact = browser.time_filter.findData("600+5")
+        assert browser.time_filter.itemText(exact) == "10 min + 5 sec"
+        browser.time_filter.setCurrentIndex(exact)
         pump(app, lambda: browser.fetch is None and bool(browser.rows))
+        assert browser.time_filter.currentText() == "10 min + 5 sec"
         assert {row["speed"] for row in browser.rows} == {"rapid"}
 
     finally:

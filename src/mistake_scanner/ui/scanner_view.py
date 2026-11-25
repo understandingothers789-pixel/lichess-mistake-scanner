@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from dataclasses import asdict, fields, replace
+from dataclasses import asdict, fields
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -122,37 +122,43 @@ class ScannerView(QWidget):
 
         archive = QWidget()
         self.modes.addWidget(archive)
-        form = QFormLayout(archive)
-        form.setContentsMargins(0, 0, 0, 0)
+        archive_form = QFormLayout(archive)
+        archive_form.setContentsMargins(0, 0, 0, 0)
         previous = (date.today().replace(day=1) - timedelta(days=1)).isoformat()[:7]
+        self.single_day = QCheckBox("Scan a single UTC day")
+        archive_form.addRow(self.single_day)
         self.first_month = self._field("YYYY-MM", previous)
         self.last_month = self._field("YYYY-MM", previous)
-        form.addRow("First month", self.first_month)
-        form.addRow("Last month", self.last_month)
-        form.addRow(button("Browse available months", self._months))
-        self.single_day = QCheckBox("Scan a single UTC day")
+        first_month_row = archive_form.rowCount()
+        archive_form.addRow("First month", self.first_month)
+        archive_form.addRow("Last month", self.last_month)
+        archive_form.addRow(button("Browse available months", self._months))
         self.archive_day = QDateEdit(QDate.currentDate().addMonths(-1))
         self.archive_day.setDisplayFormat("yyyy-MM-dd")
         self.archive_day.setCalendarPopup(True)
-        self.archive_day.setEnabled(False)
-        form.addRow(self.single_day)
-        form.addRow("UTC day", self.archive_day)
-        self.single_day.toggled.connect(self.archive_day.setEnabled)
-        self.single_day.toggled.connect(lambda checked: self.first_month.setEnabled(not checked))
-        self.single_day.toggled.connect(lambda checked: self.last_month.setEnabled(not checked))
+        day_row = archive_form.rowCount()
+        archive_form.addRow("UTC day", self.archive_day)
+
+        def show_day(checked):
+            for row in range(first_month_row, day_row):
+                archive_form.setRowVisible(row, not checked)
+            archive_form.setRowVisible(day_row, checked)
+
+        self.single_day.toggled.connect(show_day)
+        show_day(False)
         self.cache_mode = QCheckBox("Download to managed archive cache")
-        form.addRow(self.cache_mode)
+        archive_form.addRow(self.cache_mode)
         self.cache_location = self._field("Cache directory", str(self.root / "cache"))
         browse = QHBoxLayout()
         browse.addWidget(self.cache_location, 1)
         browse.addWidget(button("Browse…", self._pick_cache))
-        form.addRow("Cache directory", browse)
+        archive_form.addRow("Cache directory", browse)
         self.cache_limit = spin(int(self.library.setting("archive_cache_gb", 1)), 1, 8192)
         self.cache_limit.setSuffix(" GB")
-        form.addRow("Cache limit", self.cache_limit)
+        archive_form.addRow("Cache limit", self.cache_limit)
         self.delete_cache = QCheckBox("Delete this archive after intake")
-        form.addRow(self.delete_cache)
-        form.addRow(label("Streaming transfers compressed data without keeping an archive on disk. "
+        archive_form.addRow(self.delete_cache)
+        archive_form.addRow(label("Streaming transfers compressed data without keeping an archive on disk. "
                           "A day filter still reads the monthly stream. After interruption, the scanner may replay earlier records.", "muted", wrap=True))
         self.cache_mode.toggled.connect(self._toggle_cache)
         self._toggle_cache(False)
@@ -214,6 +220,14 @@ class ScannerView(QWidget):
                                ("Opening contains", self.opening), ("ECO code", self.eco),
                                ("Game limit", self.game_limit)):
             filters.addRow(title, control)
+
+        def show_filter_dates():
+            visible = self.source.currentData() != "archive" or not self.single_day.isChecked()
+            filters.setRowVisible(self.since, visible)
+            filters.setRowVisible(self.until, visible)
+
+        self.single_day.toggled.connect(show_filter_dates)
+        self.source.currentIndexChanged.connect(show_filter_dates)
         filters.addRow(self.clocks)
         self.start_button = button("Start scan", self.start_scan, role="primary")
         column_layout.addWidget(self.start_button)
@@ -258,19 +272,21 @@ class ScannerView(QWidget):
             stats.addWidget(card, index // 3, index % 3)
             self.metrics[name] = value
         progress.addLayout(stats)
-        self.worker_status = label("", "label")
-        self.stage_status = label("", "muted", wrap=True)
-        self.stage_status.setToolTip(
+        self.stockfish_status = label("Stockfish · Waiting for a scan", "label", wrap=True)
+        self.maia_progress = label("Maia · Waiting for a scan", "label", wrap=True)
+        self.maia_progress.setToolTip(
             "Waiting jobs are queued. An active job is counted separately. "
             "Pausing stops new jobs from starting while current Stockfish work can finish."
         )
         self.rate = label("", "muted")
-        progress.addWidget(self.worker_status)
-        progress.addWidget(self.stage_status)
+        progress.addWidget(self.stockfish_status)
+        progress.addWidget(self.maia_progress)
         progress.addWidget(self.rate)
-        self.transfer_label = label("Waiting for a game source", "muted", wrap=True)
+        self.transfer_label = label("Source intake · Waiting for a game source", "muted", wrap=True)
         progress.addWidget(self.transfer_label)
         self.transfer_bar = QProgressBar()
+        self.transfer_bar.setAccessibleName("Source intake progress")
+        self.transfer_bar.setToolTip("Source intake progress")
         self.transfer_bar.setRange(0, 1000)
         self.transfer_bar.setTextVisible(False)
         self.transfer_bar.setFixedHeight(9)
@@ -402,14 +418,15 @@ class ScannerView(QWidget):
             self.request_engines.emit()
             return
         try:
+            source = self.source.currentData()
+            day = self.archive_day.date().toString("yyyy-MM-dd") if source == "archive" and self.single_day.isChecked() else ""
             filters = GameFilter(
                 self.rating_min.value() or None, self.rating_max.value() or None, self.rating_mode.currentData(),
                 tuple(name for name, box in self.speeds.items() if box.isChecked()), self.rated.currentData(),
-                self.tc.text().strip(), self.since.text().strip(), self.until.text().strip(), self.opening.text().strip(),
+                self.tc.text().strip(), day or self.since.text().strip(), day or self.until.text().strip(), self.opening.text().strip(),
                 self.eco.text().strip(), self.user.text().strip(), self.clocks.isChecked(),
             )
             rules, limit = self.rules, self.game_limit.value()
-            source = self.source.currentData()
 
             def create(sources, name):
                 identity = self.library.create_scan(name, sources, filters, rules, profile, limit)
@@ -421,12 +438,8 @@ class ScannerView(QWidget):
             if source == "archive":
                 first, last = self.first_month.text().strip(), self.last_month.text().strip()
                 cache = Path(self.cache_location.text()) if self.cache_mode.isChecked() else None
-                day = self.archive_day.date().toString("yyyy-MM-dd") if self.single_day.isChecked() else ""
                 if day:
-                    if (filters.since and day < filters.since) or (filters.until and day > filters.until):
-                        raise ValueError("The selected archive day is outside the game date filters.")
                     first = last = day[:7]
-                    filters = replace(filters, since=day, until=day)
                 self.library.set_setting("archive_cache_gb", self.cache_limit.value())
                 size = self.cache_limit.value() * 1000 ** 3
                 delete = self.delete_cache.isChecked()
@@ -571,7 +584,6 @@ class ScannerView(QWidget):
 
         row = next((item for item in scans if item["id"] == active), None)
         info = self.runner.active()
-        self.worker_status.setText(f"Stockfish {info['workers']} / {self.runner.capacity} active · Maia {'running' if info['maia'] else 'idle'}")
         if row is None:
             for widget in (self.pause, self.resume, self.cancel):
                 widget.setEnabled(False)
@@ -584,14 +596,17 @@ class ScannerView(QWidget):
         if info["error"]:
             errors.append(info["error"])
         state = row["state"]
-        active_intake = any(s in ("running", "pending") for s in states) and not (
-            row["game_limit"] and row["selected"] >= row["game_limit"])
-        engine_pending = sum(jobs.get((stage, phase), 0) for stage in ("discovery", "detail") for phase in ("running", "pending"))
+        limit_reached = row["game_limit"] and row["selected"] >= row["game_limit"]
+        intake_complete = limit_reached or all(source == "done" for source in states)
+        active_intake = not intake_complete and any(source in ("running", "pending") for source in states)
+        engine_active = sum(jobs.get((stage, "running"), 0) for stage in ("discovery", "detail"))
+        engine_waiting = sum(jobs.get((stage, "pending"), 0) for stage in ("discovery", "detail"))
+        engine_failed = sum(jobs.get((stage, "failed"), 0) for stage in ("discovery", "detail"))
         self.pause.setEnabled(state == "running")
         self.cancel.setEnabled(state != "complete" and state != "canceled")
         self.resume.setEnabled(state != "complete" and (state != "running" or bool(errors)))
         description = state.capitalize()
-        if state == "running" and not active_intake and not engine_pending:
+        if state == "running" and not active_intake and not (engine_active or engine_waiting):
             if errors:
                 description = "Needs attention · retry available"
             elif jobs.get(("maia", "pending"), 0) and not self.runner.maia_ready:
@@ -603,16 +618,17 @@ class ScannerView(QWidget):
                   ("selected", "analyzed", "candidates", "verified", "predicted"))]
         for name, count in zip(self.metrics, counts):
             self.metrics[name].setText(f"{count:,}")
+        stockfish_state = self._stage_state(state, engine_active, engine_waiting, engine_failed,
+                                             intake_complete, "Waiting for source intake")
+        self.stockfish_status.setText(
+            f"Stockfish · {stockfish_state} · {engine_active:,} active / {self.runner.capacity} workers · "
+            f"{engine_waiting:,} queued · {jobs.get(('detail', 'done'), 0):,} of {row['candidates']:,} candidates searched")
         waiting = jobs.get(("maia", "pending"), 0)
         processing = jobs.get(("maia", "running"), 0)
-        maia_status = f"Maia {waiting:,} waiting · {processing:,} in progress"
-        if state == "paused" and waiting:
-            maia_status += " · new jobs start on resume"
-        self.stage_status.setText(
-            f"Discovery {jobs.get(('discovery', 'pending'), 0):,} queued · "
-            f"Verification {jobs.get(('detail', 'done'), 0):,} searched / {row['candidates']:,} candidates · "
-            f"{maia_status}"
-        )
+        maia_state = self._stage_state(state, processing, waiting, jobs.get(("maia", "failed"), 0),
+                                       stockfish_state == "Complete", "Waiting for Stockfish",
+                                       "Waiting for checkpoint setup" if not self.runner.maia_ready else "Queued")
+        self.maia_progress.setText(f"Maia · {maia_state} · {waiting:,} waiting · {processing:,} in progress")
         self._rate(row)
         transfer = info["transfer"]
         if transfer.get("scan") == row["id"]:
@@ -623,20 +639,36 @@ class ScannerView(QWidget):
                 amount = f" · {bytes_text(received)}" + (f" / {bytes_text(total)}" if total else "")
             else:
                 amount = ""
-            self.transfer_label.setText(transfer["label"] + amount)
+            self.transfer_label.setText(f"Source intake · {transfer['label']}{amount}")
         else:
             pending = next((s for s in sources if s["state"] == "running"), None)
             self.transfer_bar.setRange(0, 1000)
-            self.transfer_bar.setValue(1000 if not active_intake else 0)
+            self.transfer_bar.setValue(1000 if intake_complete else 0)
             text = f"Reading {pending['spec']['locator']}" if pending else f"{states.count('done')}/{len(sources)} sources processed"
-            if not active_intake and row["game_limit"] and row["selected"] >= row["game_limit"]:
+            if limit_reached:
                 text = "Game limit reached"
             skipped = sum(s["skipped"] for s in sources)
             malformed = sum(s["malformed"] for s in sources)
-            self.transfer_label.setText(f"{text} · {skipped:,} excluded · {malformed:,} malformed")
+            self.transfer_label.setText(f"Source intake · {text} · {skipped:,} excluded · {malformed:,} malformed")
         content = "\n".join(errors)
         if content != self.recent_errors.toPlainText():
             self.recent_errors.setPlainText(content)
+
+    @staticmethod
+    def _stage_state(state, active, waiting, failed, upstream_complete, upstream_status, queued_status="Queued"):
+        if active:
+            return "Finishing active work" if state in ("paused", "canceled") else "Running"
+        if state == "canceled":
+            return "Canceled"
+        if failed:
+            return "Needs attention"
+        if upstream_complete and not waiting:
+            return "Complete"
+        if state == "paused":
+            return "Paused"
+        if waiting:
+            return queued_status
+        return upstream_status
 
     def _rate(self, row):
         now = time.monotonic()

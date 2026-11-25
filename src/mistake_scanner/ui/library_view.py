@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import chess
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import QSignalBlocker, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QHBoxLayout, QHeaderView, QLineEdit, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLineEdit, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ..model import SPEEDS, board_at
 from .review import NAMES, _clock, _prob, export_ui
-from .theme import ACCENT, AMBER, MUTED, Task, button, cell, combo, label, table
+from .theme import ACCENT, AMBER, MUTED, Task, button, cell, combo, label, table, time_control_label
 
 PAGE = 80
 ORDERS = (
@@ -20,6 +20,11 @@ GAME_ORDERS = (
     ("Recently added", "recent"), ("Game date", "date"), ("White", "white"), ("Black", "black"),
     ("Rating", "rating"), ("Time control", "speed"), ("Opening", "opening"),
 )
+
+
+def _time_order(value):
+    base, _, increment = value.partition("+")
+    return (len(base), base, len(increment), increment)
 
 
 class LibraryView(QWidget):
@@ -35,6 +40,8 @@ class LibraryView(QWidget):
         self.fetch = None
         self.wanted = None
         self.last_signature = None
+        self.time_controls = set()
+        self.last_time_control_game = 0
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 14, 18, 12)
         outer.setSpacing(11)
@@ -50,10 +57,12 @@ class LibraryView(QWidget):
         time_filters = QHBoxLayout()
         self.speed_filter = combo([("Any time category", ""), *((speed.capitalize(), speed) for speed in SPEEDS)])
         self.speed_filter.setAccessibleName("Time category filter")
-        self.time_filter = QLineEdit()
-        self.time_filter.setPlaceholderText("Exact time control, e.g. 900+10")
+        self.time_filter = combo([("Any exact time", "")])
+        self.time_filter.setEditable(True)
+        self.time_filter.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.time_filter.setToolTip("Choose a time control or type a PGN value such as 900+10.")
         self.time_filter.setAccessibleName("Exact time control filter")
-        self.time_filter.setMaximumWidth(250)
+        self.time_filter.setMinimumWidth(195)
         time_filters.addWidget(label("Time control", "label"))
         time_filters.addWidget(self.speed_filter)
         time_filters.addWidget(self.time_filter)
@@ -93,7 +102,7 @@ class LibraryView(QWidget):
         self.discovery_table.setAccessibleName("Discovered chess mistakes")
         self.discovery_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.discovery_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
-        for col, width in enumerate((71, 80, 86, 190, 100, 81, 190, 73, 83, 155)):
+        for col, width in enumerate((68, 68, 105, 190, 96, 73, 190, 64, 78, 139)):
             self.discovery_table.setColumnWidth(col, width)
         self.discovery_table.cellDoubleClicked.connect(self._open)
         discovery_layout.addWidget(self.discovery_table, 1)
@@ -115,6 +124,8 @@ class LibraryView(QWidget):
         self.game_table.setAccessibleName("Analyzed games")
         for column in (0, 1, 5):
             self.game_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        for column, width in ((2, 65), (3, 104), (4, 156), (6, 82), (7, 114), (8, 115)):
+            self.game_table.setColumnWidth(column, width)
         self.game_table.cellDoubleClicked.connect(self._open)
         game_layout.addWidget(self.game_table, 1)
 
@@ -133,8 +144,9 @@ class LibraryView(QWidget):
         self.debounce.setSingleShot(True)
         self.debounce.setInterval(160)
         self.debounce.timeout.connect(self._changed)
-        for field in (self.search, self.game_search, self.eco, self.time_filter):
+        for field in (self.search, self.game_search, self.eco):
             field.textChanged.connect(lambda _: self.debounce.start())
+        self.time_filter.editTextChanged.connect(lambda _: self.debounce.start())
         for field in (self.sort, self.review, self.clock, self.game_sort, self.speed_filter):
             field.currentIndexChanged.connect(self._changed)
         for field in (self.pending, self.bookmarks):
@@ -150,7 +162,10 @@ class LibraryView(QWidget):
         self.refresh(force=True)
 
     def _params(self):
-        time_filters = {"speed": self.speed_filter.currentData(), "time_control": self.time_filter.text().strip()}
+        text = self.time_filter.currentText().strip()
+        choice = self.time_filter.findText(text)
+        exact = self.time_filter.itemData(choice) if choice >= 0 else text
+        time_filters = {"speed": self.speed_filter.currentData(), "time_control": exact}
         if self.tabs.currentIndex() == 1:
             return self.library.game_page, {
                 **time_filters,
@@ -182,16 +197,20 @@ class LibraryView(QWidget):
         self.wanted = request
         if self.fetch is not None:
             return
+        last_game = self.last_time_control_game
 
         def load(_):
             try:
-                return query(**options, limit=PAGE + 1, offset=page * PAGE)
+                revision, controls = self.library.time_controls_since(last_game)
+                return revision, controls, query(**options, limit=PAGE + 1, offset=page * PAGE)
             finally:
                 self.library.close_thread()
 
         def receive(results):
             if self.wanted == request:
-                self._show_results(tab, page, results)
+                self.last_time_control_game, controls, rows = results
+                self._show_time_controls(controls)
+                self._show_results(tab, page, rows)
 
         def done():
             self.fetch = None
@@ -204,6 +223,18 @@ class LibraryView(QWidget):
         task.failed.connect(lambda message: self.meta.setText(message) if self.wanted == request else None)
         task.finished.connect(done)
         task.start()
+
+    def _show_time_controls(self, controls):
+        if controls <= self.time_controls:
+            return
+        self.time_controls.update(controls)
+        with QSignalBlocker(self.time_filter):
+            text = self.time_filter.currentText()
+            self.time_filter.clear()
+            self.time_filter.addItem("Any exact time", "")
+            for value in sorted(self.time_controls, key=_time_order):
+                self.time_filter.addItem(time_control_label(value), value)
+            self.time_filter.setEditText(text)
 
     def _show_results(self, tab, page, fetched):
         next_page = len(fetched) > PAGE
@@ -238,7 +269,8 @@ class LibraryView(QWidget):
             status = f"{item['pending']} pending" if item["pending"] else "Analyzed"
             if item["reviewed"]:
                 status += " · Reviewed"
-        values = (game, other, item["result"], item["day"], item["time_control"] or item["speed"],
+        time = time_control_label(item["time_control"]) or (item["speed"] or "").capitalize()
+        values = (game, other, item["result"], item["day"], time or None,
                   item["opening"], item["moments"], item["missed"], status)
         for column, value in enumerate(values):
             self.game_table.setItem(row, column, cell(value, ACCENT if column == 6 else None, str(value) if value else None))

@@ -52,13 +52,13 @@ QPushButton[role="primary"]:disabled { background: #2b3c49; color: #9eafbd; bord
 QPushButton[role="nav"] { background: transparent; border-color: transparent; padding: 7px 15px; color: #a3b4c7; }
 QPushButton[role="nav"]:hover { background: #222e3c; color: #dce5ef; }
 QPushButton[role="nav"]:checked { color: #88cfc0; background: #1b2633; border-bottom: 2px solid #88cfc0; font-weight: 650; }
-QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {
+QLineEdit, QComboBox, QDateEdit, QSpinBox, QPlainTextEdit {
     background: #1b2633; color: #dce5ef; border: 1px solid #344559;
     border-radius: 6px; padding: 5px 8px; min-height: 20px;
     selection-background-color: #2b4554;
 }
 QComboBox QAbstractItemView { background: #222e3c; selection-background-color: #2b4554; }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus { border-color: #88cfc0; }
+QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QSpinBox:focus, QPlainTextEdit:focus { border-color: #88cfc0; }
 QCheckBox, QRadioButton { background: transparent; spacing: 7px; }
 QCheckBox::indicator { width: 13px; height: 13px; background: #1b2633; border: 1px solid #7890a3; border-radius: 3px; }
 QCheckBox::indicator:checked { background: #88cfc0; border: 2px solid #527e80; width: 11px; height: 11px; }
@@ -175,6 +175,19 @@ def score_color(score) -> str:
     if score.winner > 0 or (score.cp is not None and score.cp > 30):
         return ACCENT
     return MUTED
+
+
+def time_control_label(value: str | None) -> str:
+    if not value:
+        return ""
+    base, _, increment = value.partition("+")
+    if base.isascii() and base.isdigit() and increment.isascii() and increment.isdigit():
+        minutes, seconds = divmod(int(base), 60)
+        start = f"{minutes} min" if minutes else f"{seconds} sec"
+        if minutes and seconds:
+            start += f" {seconds} sec"
+        return f"{start} + {int(increment)} sec"
+    return "Untimed" if value == "-" else value
 
 
 def error(parent: QWidget, title: str, message: str) -> None:

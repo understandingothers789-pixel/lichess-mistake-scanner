@@ -85,14 +85,14 @@ class Window(QMainWindow):
         menu.addSeparator()
         for dock in (self.review.chart_dock, self.review.engine_dock, self.review.score_dock, self.review.moment_dock):
             menu.addAction(dock.toggleViewAction())
-        menu.addAction("Reset analysis layout", lambda: self.review.workspace.restoreState(self.review.reset_state))
+        menu.addAction("Reset analysis layout", self.review.reset_layout)
         navigation = self.menuBar().addMenu("Navigate")
         for title, shortcut, callback in (
             ("Previous move", "Left", lambda: self.review.advance(-1)),
             ("Next move", "Right", lambda: self.review.advance(1)),
             ("Previous interesting position", "Alt+Left", lambda: self.review.jump(-1)),
             ("Next interesting position", "Alt+Right", lambda: self.review.jump(1)),
-            ("Leave variation", "Escape", lambda: self.review.go(self.review.ply)),
+            ("Leave variation", "Escape", self.review.leave_variation),
         ):
             action = QAction(title, self)
             action.setShortcut(QKeySequence(shortcut))

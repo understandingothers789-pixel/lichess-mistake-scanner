@@ -428,6 +428,15 @@ class Library:
         with self.transaction() as db:
             db.execute(f"UPDATE {table} SET {columns} WHERE id=?", (*values.values(), identity))
 
+    def time_controls_since(self, last_game: int) -> tuple[int, set[str]]:
+        db = self.connection()
+        newest = db.execute("SELECT COALESCE(MAX(rowid), 0) FROM games").fetchone()[0]
+        controls = {row[0] for row in db.execute("""
+            SELECT DISTINCT time_control FROM games
+            WHERE rowid>? AND rowid<=? AND time_control IS NOT NULL AND time_control!=''
+        """, (last_game, newest))}
+        return newest, controls
+
     def game_page(self, query="", offset=0, limit=100, *, bookmarks=False, sort="recent", speed="", time_control="") -> list[dict]:
         order = {"recent": "scan_games.id DESC", "date": "games.day DESC", "white": "games.white COLLATE NOCASE",
                  "black": "games.black COLLATE NOCASE", "rating": "games.white_elo DESC, games.black_elo DESC",

@@ -5,19 +5,19 @@ from pathlib import Path
 
 import chess
 import chess.pgn
-from PySide6.QtCore import QEvent, QTimer, Qt, Signal
+from PySide6.QtCore import QByteArray, QEvent, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog,
-    QLabel, QMainWindow, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QLabel, QMainWindow, QScrollArea, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ..exports import san_line, write_export
 from ..model import Score, SearchSettings, Variation, board_at, position_key
 from .board import BoardWidget, EvalGraph
 from .preview import VariationPreview
-from .theme import ACCENT, AMBER, MAIA, MUTED, Task, button, cell, error, label, score_color, table
+from .theme import ACCENT, AMBER, MAIA, MUTED, Task, button, cell, error, label, score_color, table, time_control_label
 
 FORMATS = {
     "Annotated PGN": ("pgn", "pgn"), "Original PGN": ("original", "pgn"),
@@ -81,6 +81,12 @@ def _prob(value) -> str:
     return "<0.1%" if 0 < value < 0.001 else f"{value:.1%}"
 
 
+def _score_text(score, depth) -> str:
+    if score is None:
+        return "—"
+    return f"{score.display()} (d{depth})" if depth else f"{score.display()} (final position)"
+
+
 class Review(QWidget):
     reanalyze = Signal(int)
     open_library = Signal()
@@ -98,11 +104,18 @@ class Review(QWidget):
         self.live_timer = QTimer(self)
         self.live_timer.setInterval(100)
         self.live_timer.timeout.connect(self._poll_live)
+        self.comparison_future = None
+        self.comparison = None
+        self.comparison_error = ""
+        self.comparison_timer = QTimer(self)
+        self.comparison_timer.setInterval(100)
+        self.comparison_timer.timeout.connect(self._poll_comparison)
         self.game = None
         self.scan = None
         self.moments = []
         self.current = None
         self.ply = 0
+        self.move_ply = None
         self.branch = []
         self.step = 0
         self.variation_preview = VariationPreview(self)
@@ -169,7 +182,7 @@ class Review(QWidget):
         ):
             controls.addWidget(button(text, callback, tip=tip))
         controls.addWidget(button("Flip", self._flip, tip="Flip board"))
-        self.return_line = button("Main line", lambda: self.go(self.ply), tip="Exit the variation and return to the game")
+        self.return_line = button("Main line", self.leave_variation, tip="Exit the variation and return to the game")
         controls.addWidget(self.return_line)
         controls.addStretch()
         self.previous_moment = button("‹ Moment", lambda: self.jump(-1), tip="Previous interesting position")
@@ -186,17 +199,24 @@ class Review(QWidget):
         self.graph = EvalGraph()
         self.graph.selected.connect(self.go)
         chart_layout.addWidget(self.graph)
-        legend = label("White perspective   ·   Dotted: fast search   ·   Pale marker: detailed   ·   Amber: discovery", "muted")
+        legend = label("White perspective · Dotted: fast · Teal: detailed · Amber: finding", "muted", wrap=True)
         legend.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chart_layout.addWidget(legend)
         self.chart_dock = self._dock("Evaluation graph", chart_box, Qt.DockWidgetArea.BottomDockWidgetArea)
 
         analysis = QWidget()
         analysis.setObjectName("card")
-        analysis.setMinimumWidth(380)
         analysis_layout = QVBoxLayout(analysis)
         analysis_layout.setContentsMargins(9, 7, 9, 7)
         analysis_layout.setSpacing(6)
+        position = QHBoxLayout()
+        self.position_label = label("", "label", wrap=True)
+        position.addWidget(self.position_label, 1)
+        self.position_eval = label("—", "eval")
+        self.position_eval.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.position_eval.setMinimumWidth(65)
+        position.addWidget(self.position_eval)
+        analysis_layout.addLayout(position)
         phase = QHBoxLayout()
         self.before = button("Before move", lambda: self._phase(False))
         self.after = button("After move", lambda: self._phase(True))
@@ -204,15 +224,14 @@ class Review(QWidget):
         self.after.setCheckable(True)
         phase.addWidget(self.before)
         phase.addWidget(self.after)
+        self.compare_button = button("Compare move", self._compare_move, tip="Run a fresh before-and-after Stockfish search")
+        phase.addWidget(self.compare_button)
         phase.addStretch()
-        self.position_label = label("", "label")
-        phase.addWidget(self.position_label)
-        self.position_eval = label("—", "eval")
-        self.position_eval.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.position_eval.setMinimumWidth(65)
-        self.position_eval.setToolTip("Evaluation from White's perspective")
-        phase.addWidget(self.position_eval)
         analysis_layout.addLayout(phase)
+        self.scan_scores = label("", "muted", wrap=True)
+        self.comparison_status = label("", "label", wrap=True)
+        analysis_layout.addWidget(self.scan_scores)
+        analysis_layout.addWidget(self.comparison_status)
         self.line_table = table(["Move", "Eval", "Continuation", "Depth", "Maia"])
         self.line_table.horizontalHeader().setStretchLastSection(False)
         for index, width in enumerate((64, 60, 190, 51, 62)):
@@ -236,7 +255,7 @@ class Review(QWidget):
         options.addWidget(self.occurrences)
         options.addStretch()
         analysis_layout.addLayout(options)
-        self.engine_dock = self._dock("Stockfish and Maia", analysis, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.engine_dock = self._dock("Stockfish and Maia", analysis, Qt.DockWidgetArea.RightDockWidgetArea, scroll=True)
 
         score_box = QWidget()
         score_box.setObjectName("card")
@@ -266,7 +285,7 @@ class Review(QWidget):
         review_tools.addWidget(self.reviewed)
         review_tools.addStretch()
         score_layout.addLayout(review_tools)
-        self.score_dock = self._dock("Game score", score_box, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.score_dock = self._dock("Game score", score_box, Qt.DockWidgetArea.RightDockWidgetArea, scroll=True)
         self.workspace.splitDockWidget(self.engine_dock, self.score_dock, Qt.Orientation.Vertical)
 
         moments_box = QWidget()
@@ -288,30 +307,76 @@ class Review(QWidget):
         tools.addWidget(self.review_moment)
         tools.addStretch()
         moment_layout.addLayout(tools)
-        self.moment_dock = self._dock("Interesting moments", moments_box, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.moment_dock = self._dock("Interesting moments", moments_box, Qt.DockWidgetArea.RightDockWidgetArea, scroll=True)
         self.workspace.splitDockWidget(self.score_dock, self.moment_dock, Qt.Orientation.Vertical)
-        self.workspace.resizeDocks([self.engine_dock], [634], Qt.Orientation.Horizontal)
-        self.workspace.resizeDocks([self.engine_dock, self.score_dock, self.moment_dock], [324, 239, 150], Qt.Orientation.Vertical)
+        self.workspace.setTabPosition(Qt.DockWidgetArea.RightDockWidgetArea, QTabWidget.TabPosition.North)
+        self.workspace.resizeDocks([self.engine_dock], [565], Qt.Orientation.Horizontal)
+        self.workspace.resizeDocks([self.engine_dock, self.score_dock, self.moment_dock], [420, 190, 150], Qt.Orientation.Vertical)
         self.workspace.resizeDocks([self.chart_dock], [108], Qt.Orientation.Vertical)
         self.reset_state = self.workspace.saveState()
-        saved = self.library.setting("analysis_layout")
-        if saved:
-            from PySide6.QtCore import QByteArray
-
-            self.workspace.restoreState(QByteArray.fromHex(saved.encode()))
+        self.compact = False
+        self.layout_states = {}
+        for compact, key in ((False, "analysis_layout"), (True, "analysis_compact_layout")):
+            saved = self.library.setting(key)
+            if saved:
+                self.layout_states[compact] = QByteArray.fromHex(saved.encode())
+        self.workspace.restoreState(self.layout_states.get(False, self.reset_state))
         self._render()
 
-    def _dock(self, title, content, area):
+    def _dock(self, title, content, area, *, scroll=False):
         dock = QDockWidget(title)
         dock.setObjectName(title.replace(" ", "_"))
+        if scroll:
+            viewport = QScrollArea()
+            viewport.setWidgetResizable(True)
+            viewport.setMinimumWidth(370)
+            viewport.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            viewport.setWidget(content)
+            content = viewport
         dock.setWidget(content)
         self.workspace.addDockWidget(area, dock)
         return dock
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        compact = event.size().width() < 1120 or event.size().height() < 690
+        if compact != self.compact:
+            self.layout_states[self.compact] = self.workspace.saveState()
+            self.compact = compact
+            for dock, short, full in (
+                (self.engine_dock, "Engine", "Stockfish and Maia"),
+                (self.score_dock, "Score", "Game score"),
+                (self.moment_dock, "Findings", "Interesting moments"),
+                (self.chart_dock, "Graph", "Evaluation graph"),
+            ):
+                dock.setWindowTitle(short if compact else full)
+            if compact and compact not in self.layout_states:
+                self._compact_layout()
+            else:
+                self.workspace.restoreState(self.layout_states.get(compact, self.reset_state))
+
+    def _compact_layout(self):
+        self.workspace.restoreState(self.reset_state)
+        for dock in (self.score_dock, self.moment_dock, self.chart_dock):
+            self.workspace.tabifyDockWidget(self.engine_dock, dock)
+        self.workspace.resizeDocks([self.engine_dock], [390], Qt.Orientation.Horizontal)
+        self.engine_dock.raise_()
+
+    def reset_layout(self):
+        self.layout_states.clear()
+        if self.compact:
+            self._compact_layout()
+        else:
+            self.workspace.restoreState(self.reset_state)
+
     def save(self):
-        self.library.set_setting("analysis_layout", bytes(self.workspace.saveState().toHex()).decode())
+        self.layout_states[self.compact] = self.workspace.saveState()
+        for compact, key in ((False, "analysis_layout"), (True, "analysis_compact_layout")):
+            saved = self.layout_states.get(compact)
+            self.library.set_setting(key, bytes(saved.toHex()).decode() if saved is not None else "")
 
     def load(self, scan_game: int, moment_id: int | None = None, ply: int | None = None):
+        self._clear_comparison()
         self.game = self.library.game(scan_game)
         if self.game is None:
             return
@@ -321,10 +386,11 @@ class Review(QWidget):
         saved = moment_id or (self.game["cursor_moment"] if ply is None else None)
         self.current = self.library.mistake(saved) if saved else None
         self.ply = self.current["ply"] - 1 if moment_id and self.current else self.game["cursor"] if ply is None else ply
+        self.move_ply = self.current["ply"] if self.current else None
         self.branch, self.step = [], 0
         profile = self.scan["profile"]
         self.heading.setText(f"{self.game['white'] or 'White'}  vs  {self.game['black'] or 'Black'}")
-        metadata = [self.game["day"], (self.game["speed"] or "").capitalize(), self.game["time_control"],
+        metadata = [self.game["day"], (self.game["speed"] or "").capitalize(), time_control_label(self.game["time_control"]),
                     self.game["opening"], self.game["eco"], self.game["result"]]
         self.context.setText("  ·  ".join(str(value) for value in metadata if value))
         self.context.setToolTip(f"{profile.get('version', profile.get('name', 'Stockfish'))}\n"
@@ -362,12 +428,19 @@ class Review(QWidget):
             series.update({ply: (line.score, line.depth, False, True) for ply, line in self.position_info.items()})
             self.graph.set_data(series, markers, len(self.game["moves"]))
             self._moment_rows()
-            if self.current:
-                self.current = next((m for m in moments if m["id"] == self.current["id"]), None)
-            if self.current is None:
-                self.current = self._at_ply()
+            if self.move_ply is None:
+                first = self._at_ply()
+                self.move_ply = first["ply"] if first else self.ply or (1 if self.game["moves"] else None)
+            self.current = next((m for m in moments if m["ply"] == self.move_ply), None)
             self._select_moment()
             self._render()
+
+    def _scan_score(self, ply):
+        deep = self.position_info.get(ply)
+        if deep is not None:
+            return deep.score, deep.depth
+        discovery = self.evaluations.get(ply)
+        return (Score(**discovery["score"]), discovery["depth"]) if discovery else (None, None)
 
     def _score_rows(self):
         self.moves.clear()
@@ -407,11 +480,8 @@ class Review(QWidget):
             if row is None or move_board.turn:
                 row = QTreeWidgetItem([f"{move_board.fullmove_number}."])
                 self.moves.addTopLevelItem(row)
-            deep = self.position_info.get(ply)
-            discovery = self.evaluations.get(ply)
-            score = deep.score if deep else Score(**discovery["score"]) if discovery else None
-            depth = deep.depth if deep else discovery["depth"] if discovery else None
-            depth_label = (f"d{depth}" if depth else "Final") if depth is not None else ""
+            score, depth = self._scan_score(ply)
+            scan_label = f"Saved scan {_score_text(score, depth)}" if score else ""
             moment = moments.get(ply)
             state = ""
             if moment:
@@ -425,7 +495,7 @@ class Review(QWidget):
             row.setForeground(col + 1, QColor(score_color(score) if score else MUTED))
             for column in (col, col + 1):
                 row.setData(column, Qt.ItemDataRole.UserRole, (ply, ()))
-                row.setToolTip(column, " · ".join(part for part in (node.san(), depth_label, state) if part))
+                row.setToolTip(column, " · ".join(part for part in (node.san(), scan_label, state) if part))
             self.score_items[ply] = row, col
             for alternative in node.parent.variations[1:]:
                 branch(alternative, self.score_items[ply - 1][0], ply - 1, ())
@@ -454,21 +524,32 @@ class Review(QWidget):
             for move in self.branch[:self.step]:
                 board.push_uci(move)
         moment = self.current
-        deep = self.position_info.get(self.ply)
-        entry = self.evaluations.get(self.ply)
-        score = deep.score if deep else Score(**entry["score"]) if entry else None
+        move_ply = self.move_ply
+        score, depth = self._scan_score(self.ply)
+        score_source = "Saved scan"
         self.line_table.setRowCount(0)
         self.lines = []
         policy = None
         good = ()
         hint = None
-        self.before.setEnabled(moment is not None)
-        self.after.setEnabled(moment is not None)
-        after = moment and self.ply == moment["ply"]
-        self.before.setChecked(bool(moment and not after))
-        self.after.setChecked(bool(after))
+        can_inspect = move_ply is not None and not self.branch
+        self.before.setEnabled(can_inspect)
+        self.after.setEnabled(can_inspect)
+        self.compare_button.setEnabled(can_inspect and self.comparison_future is None)
+        after = move_ply is not None and self.ply == move_ply
+        self.before.setChecked(can_inspect and not after)
+        self.after.setChecked(can_inspect and after)
         self.position_label.setText("")
         self.maia.setText("")
+        self.scan_scores.setVisible(can_inspect)
+        if can_inspect:
+            root = board_at(self.game["root"], self.game["moves"], move_ply - 1)
+            actual = root.san(chess.Move.from_uci(self.game["moves"][move_ply - 1]))
+            self.position_label.setText(f"{root.fullmove_number}{'.' if root.turn else '…'} {actual}")
+            saved_before = _score_text(*self._scan_score(move_ply - 1))
+            saved_after = _score_text(*self._scan_score(move_ply))
+            self.scan_scores.setText(f"Saved scan positions · Before {saved_before} · After {saved_after}")
+        self._render_comparison(can_inspect)
         if moment:
             self._render_moment(moment, bool(after))
             data = moment["detail"]
@@ -477,15 +558,21 @@ class Review(QWidget):
                 policy = self.library.policy(moment["after_policy" if after else "before_policy"])
                 good = data["good_after" if after else "good_before"]
         else:
-            self.summary.setText("Select an interesting moment to inspect its before and after searches."
-                                 if self.game else "Open a discovery to see its full Stockfish variations.")
+            self.summary.setText("" if self.game else "Open a game or discovery to analyze moves.")
         self.lines_board = self._root()
+        live_lines = False
         if self.branch and not self.live_button.isChecked():
             score, hint = None, None
-        if self.live_button.isChecked():
+        if self.comparison is not None and can_inspect:
+            before, _, replies = self.comparison
+            self.lines = replies if after else before
+            live_lines = True
+            good = ()
+        elif self.live_button.isChecked() and self.isVisible():
             self.lines_board = board
             self._request_live(board)
             self.lines = self.live_lines or []
+            live_lines = True
             good = ()
             if self.branch and self.step:
                 policy = None
@@ -496,15 +583,20 @@ class Review(QWidget):
                                         "Live Stockfish · game over")
             self.position_label.setText(phase)
         if self.lines:
-            if self.live_button.isChecked() or not self.branch:
-                score = self.lines[0].score
+            if live_lines or not self.branch:
+                score, depth = self.lines[0].score, self.lines[0].depth
                 hint = self.lines[0].pv[0] if self.lines[0].pv else None
-            self._show_lines(self.lines_board, good, policy)
+                if live_lines:
+                    score_source = "Live Stockfish"
+            self._show_lines(self.lines_board, good, policy, live=live_lines)
+        self.summary.setVisible(bool(self.summary.text()))
+        self.maia.setVisible(bool(self.maia.text()))
         clocks = None
         if self.game:
             clocks = ({chess.WHITE: None, chess.BLACK: None} if self.branch and self.step
                       else recorded_clocks(self.game, self.ply))
         self.position_eval.setText(score.display() if score else "—")
+        self.position_eval.setToolTip(f"{score_source} · {_score_text(score, depth)} · White perspective" if score else "")
         self.board.set_position(board, score, hint, clocks=clocks)
         self.graph.set_ply(self.ply)
         self.all_policy.setEnabled(policy is not None and bool(policy))
@@ -531,7 +623,7 @@ class Review(QWidget):
         self.board_position.setText(f"Variation  {self.step}/{len(self.branch)}" if self.branch else
                                     f"Ply {self.ply} / {len(self.game['moves'])}" if self.game else "Starting position")
 
-    def _show_lines(self, root, good, policy):
+    def _show_lines(self, root, good, policy, *, live):
         self.lines = [line for line in self.lines if line.pv]
         self.line_table.setRowCount(len(self.lines))
         for i, line in enumerate(self.lines):
@@ -539,8 +631,9 @@ class Review(QWidget):
             continuation_board = root.copy()
             san = continuation_board.san_and_push(chess.Move.from_uci(move))
             continuation = san_line(continuation_board, line.pv[1:]) if len(line.pv) > 1 else "—"
-            tip = f"{san_line(root, line.pv)} · d{line.depth}"
-            if not self.live_button.isChecked():
+            source = "Live Stockfish" if live else "Saved scan"
+            tip = f"{san_line(root, line.pv)} · {source} · d{line.depth}"
+            if not live:
                 tip += " · Acceptable" if move in good else " · Outside tolerance"
             if line.nodes is not None:
                 tip += f" · {line.nodes:,} nodes"
@@ -551,7 +644,9 @@ class Review(QWidget):
             self.line_table.setItem(i, 4, cell(_prob(None if policy is None else policy.get(move)), MAIA, tip))
 
     def _toggle_live(self, enabled):
-        if not enabled:
+        if enabled:
+            self._clear_comparison()
+        else:
             self._clear_live()
         self._render()
 
@@ -585,6 +680,55 @@ class Review(QWidget):
         except Exception as exc:
             self.live_error = f"Stockfish: {exc}"
         self._render()
+
+    def _clear_comparison(self):
+        if self.comparison_future is not None:
+            self.comparison_future.cancel()
+        self.comparison_future = self.comparison = None
+        self.comparison_error = ""
+        self.comparison_timer.stop()
+
+    def _compare_move(self):
+        if self.move_ply is None or self.branch or self.comparison_future is not None:
+            return
+        self.live_button.setChecked(False)
+        self._clear_comparison()
+        profile = self.library.engine(self.library.setting("active_engine"))
+        if profile is None:
+            self.comparison_error = "Select Stockfish in Engine Manager to compare this move."
+        else:
+            rules = SearchSettings(**self.library.setting("rules", {}))
+            before = board_at(self.game["root"], self.game["moves"], self.move_ply - 1)
+            played_move = self.game["moves"][self.move_ply - 1]
+            self.comparison_future = self.runner.analyze_position(profile, rules, before, played_move=played_move)
+            self.comparison_timer.start()
+        self._render()
+
+    def _poll_comparison(self):
+        if self.comparison_future is None or not self.comparison_future.done():
+            return
+        self.comparison_timer.stop()
+        try:
+            self.comparison = self.comparison_future.result()
+        except Exception as exc:
+            self.comparison_error = f"Stockfish: {exc}"
+        self.comparison_future = None
+        self._render()
+
+    def _render_comparison(self, can_inspect):
+        text = self.comparison_error
+        if self.comparison_future is not None:
+            text = "Live Stockfish · Searching before and after the move…"
+        elif self.comparison is not None:
+            before, played, replies = self.comparison
+            best, reply = before[0], replies[0]
+            root = board_at(self.game["root"], self.game["moves"], self.move_ply - 1)
+            best_move = root.san(chess.Move.from_uci(best.pv[0]))
+            played_move = root.san(chess.Move.from_uci(played.pv[0]))
+            text = (f"Live Stockfish · Best {best_move} {_score_text(best.score, best.depth)} · "
+                    f"Played {played_move} {_score_text(played.score, played.depth)} · After {_score_text(reply.score, reply.depth)}")
+        self.comparison_status.setText(text)
+        self.comparison_status.setVisible(can_inspect and bool(text))
 
     def _render_moment(self, moment, after):
         root = board_at(self.game["root"], self.game["moves"], moment["ply"] - 1)
@@ -634,12 +778,18 @@ class Review(QWidget):
         self.board.toggle()
         self._players()
 
-    def go(self, ply: int, moment=None):
+    def go(self, ply: int, moment=None, *, move_ply=None):
         if not self.game:
             return
         self.ply = max(0, min(ply, len(self.game["moves"])))
         if moment is None:
-            moment = self._at_ply()
+            moment = (self._at_ply() if move_ply is None else
+                      next((m for m in self.moments if m["ply"] == move_ply), None))
+        if move_ply is None:
+            move_ply = moment["ply"] if moment else self.ply or (1 if self.game["moves"] else None)
+        if move_ply != self.move_ply:
+            self._clear_comparison()
+        self.move_ply = move_ply
         self.current = moment
         self.branch, self.step = [], 0
         self.library.review(self.game["scan_game"], game=True, cursor=self.ply, cursor_moment=moment["id"] if moment else None)
@@ -664,8 +814,11 @@ class Review(QWidget):
         return None
 
     def _phase(self, after: bool):
-        if self.current:
-            self.go(self.current["ply"] - int(not after), self.current)
+        if self.move_ply is not None:
+            self.go(self.move_ply - int(not after), self.current, move_ply=self.move_ply)
+
+    def leave_variation(self):
+        self.go(self.ply, self.current, move_ply=self.move_ply)
 
     def advance(self, delta: int):
         if self.branch:
@@ -693,7 +846,7 @@ class Review(QWidget):
         if target is None:
             return
         ply, pv = target
-        self.go(ply)
+        self.go(ply, move_ply=ply or None)
         if pv:
             self.branch, self.step = list(pv), len(pv)
             self._render()
@@ -740,8 +893,13 @@ class Review(QWidget):
 
     def hideEvent(self, event):
         self.variation_preview.dismiss()
-        self.live_button.setChecked(False)
+        self._clear_live()
+        self._clear_comparison()
         super().hideEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._render()
 
     def _review(self, name, game):
         item = self.game if game else self.current
@@ -801,7 +959,10 @@ class Review(QWidget):
 
     def _open_source(self):
         if self.game and (self.game["site"] or "").startswith("https://lichess.org/"):
-            QDesktopServices.openUrl(QUrl(self.game["site"]))
+            url = QUrl(self.game["site"])
+            if self.ply:
+                url.setFragment(str(self.ply))
+            QDesktopServices.openUrl(url)
 
     def _export(self):
         if self.export_task and self.export_task.isRunning():

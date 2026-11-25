@@ -1,5 +1,13 @@
 # What changed
 
+## v0.1.11
+
+- Smaller Analysis windows keep the board large and put Stockfish, the game score, findings, and the graph in side tabs.
+- Compare any move with Stockfish, including moves the scan skipped. See the best and played moves from the same position, the resulting position, and the depth and source of each evaluation.
+- Scanner labels source intake separately from Stockfish and Maia progress. Single-day mode shows one UTC date picker.
+- Library shows readable time controls and lets you pick from the controls already in your games.
+- The Lichess link opens the selected move, and Live Stockfish resumes when you return to Analysis.
+
 ## v0.1.10
 
 - Scroll over the main board to step forward or backward through the game or current variation.

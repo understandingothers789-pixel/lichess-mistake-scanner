@@ -150,21 +150,30 @@ class Runner:
             self.maintenance = False
             self.wakeup.set()
 
-    def analyze_position(self, profile, rules, board) -> Future:
+    def analyze_position(self, profile, rules, board, *, played_move: str | None = None) -> Future:
         result = Future()
         with self.gate:
             if self.pending_live is not None:
                 self.pending_live[0].cancel()
-            self.pending_live = result, profile, rules, board.copy()
+            self.pending_live = result, profile, rules, board.copy(), played_move
             self.wakeup.set()
         return result
 
-    def _live_search(self, result, profile, rules, board):
+    def _live_search(self, result, profile, rules, board, played_move):
         if not result.set_running_or_notify_cancel():
             return
         try:
             engine = self.pool.acquire(profile, rules)
-            result.set_result(engine(board, rules.detail_depth, rules.detail_pv, seconds=2.0))
+            before = engine(board, rules.detail_depth, rules.detail_pv, seconds=2.0)
+            if played_move is None:
+                result.set_result(before)
+            else:
+                played = next((line for line in before if line.pv and line.pv[0] == played_move), None)
+                if played is None:
+                    played = engine(board, rules.detail_depth, move=played_move, seconds=2.0)[0]
+                board.push_uci(played_move)
+                after = engine(board, rules.detail_depth, rules.detail_pv, seconds=2.0)
+                result.set_result((before, played, after))
         except Exception as exc:
             self.pool.discard()
             result.set_exception(exc)
