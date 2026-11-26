@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lichess-mistake-scanner"
-version = "0.1.13"
+version = "0.1.14"
 description = "Local chess mistake discovery and analysis with Stockfish and Maia 3"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -30,7 +30,7 @@ mistake-scanner = "mistake_scanner.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mistake_scanner = ["assets/merida/*.svg", "assets/merida/LICENSE.txt"]
+mistake_scanner = ["assets/merida/*.svg", "assets/merida/LICENSE.txt", "assets/second-look.png", "assets/second-look.ico"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

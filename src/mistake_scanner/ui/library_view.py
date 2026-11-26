@@ -54,8 +54,8 @@ class LibraryView(QWidget):
         headings.addWidget(label("Analysis library", "title"))
         headings.addWidget(label("Explore discoveries or open the full games they came from.", "muted"))
         heading.addLayout(headings, 1)
-        self.export_selected = button("Export selected", lambda: self._export(False))
-        self.export_filtered = button("Export filtered collection", lambda: self._export(True))
+        self.export_selected = button("Export selected", lambda: self._export(False), tip="Save the highlighted games or findings to a file.")
+        self.export_filtered = button("Export filtered collection", lambda: self._export(True), tip="Save every match for the current filters, including other pages.")
         heading.addWidget(self.export_selected)
         heading.addWidget(self.export_filtered)
         outer.addLayout(heading)
@@ -80,6 +80,8 @@ class LibraryView(QWidget):
         self.games = QWidget()
         self.tabs.addTab(self.discoveries, "Discoveries")
         self.tabs.addTab(self.games, "Games")
+        self.tabs.setTabToolTip(0, "Browse mistakes and missed replies found by Stockfish.")
+        self.tabs.setTabToolTip(1, "Browse full games, including games with no findings.")
         self.tabs.currentChanged.connect(self._changed)
         outer.addWidget(self.tabs, 1)
 
@@ -125,7 +127,7 @@ class LibraryView(QWidget):
         member_layout = QVBoxLayout(members)
         member_layout.setContentsMargins(0, 0, 0, 0)
         member_heading = QHBoxLayout()
-        member_heading.addWidget(button("‹ Position groups", self._back_to_groups))
+        member_heading.addWidget(button("‹ Position groups", self._back_to_groups, tip="Go back to the list of grouped discoveries."))
         self.group_title = label("", "label", wrap=True)
         member_heading.addWidget(self.group_title, 1)
         member_layout.addLayout(member_heading)
@@ -161,10 +163,10 @@ class LibraryView(QWidget):
 
         foot = QHBoxLayout()
         self.meta = label("", "muted", wrap=True)
-        self.prev = button("‹ Previous", lambda: self._turn(-1))
-        self.next = button("Next ›", lambda: self._turn(1))
-        self.open = button("Open analysis", self._open_selected, role="primary")
-        self.review_filtered = button("Review filtered results", self._start_review)
+        self.prev = button("‹ Previous", lambda: self._turn(-1), tip="Show the previous page of results.")
+        self.next = button("Next ›", lambda: self._turn(1), tip="Show the next page of results.")
+        self.open = button("Open analysis", self._open_selected, role="primary", tip="Open the selected game or finding on the analysis board.")
+        self.review_filtered = button("Review filtered results", self._start_review, tip="Open the filtered list in order and review it from the analysis board.")
         foot.addWidget(self.meta, 1)
         foot.addWidget(self.prev)
         foot.addWidget(self.next)
@@ -183,6 +185,33 @@ class LibraryView(QWidget):
             field.currentIndexChanged.connect(self._changed)
         for field in (self.pending, self.bookmarks, self.grouped):
             field.toggled.connect(self._changed)
+        for control, tip in (
+            (self.speed_filter, "Filter by speed, such as Rapid or Classical."),
+            (self.grouped, "Combine findings that reached the same position and played the same move."),
+            (self.search, "Find discoveries by player name or part of an opening name."),
+            (self.sort, "Choose how findings are ordered. Maia probability ranks moves by how likely players are to choose them."),
+            (self.review, "Filter by reviewed status or bookmarks."),
+            (self.clock, "Filter by time remaining for the player who made the move. Requires recorded clocks."),
+            (self.eco, "Filter findings by an opening classification code, such as C20."),
+            (self.pending, "Include possible mistakes that are still awaiting a deeper Stockfish check."),
+            (self.game_search, "Find analyzed games by player name or part of an opening name."),
+            (self.game_sort, "Choose how full games are ordered."),
+            (self.bookmarks, "Show only games you bookmarked."),
+            (self.discovery_table, "Double-click a finding to open the game just before that move."),
+            (self.game_table, "Double-click a game to open it at your last position."),
+            (self.group_table, "Double-click a group to see the source games for that position and move."),
+            (self.member_table, "Double-click a source game to see its finding and saved analysis."),
+        ):
+            control.setToolTip(tip)
+            control.setAccessibleDescription(tip)
+        for table_widget, tips in (
+            (self.discovery_table, {0: "Estimated chance a player at the shown rating would choose the move.",
+                                    1: "Stockfish’s estimated loss from the move, measured in pawns.",
+                                    8: "Number of times this move was played in this position in the library."}),
+            (self.group_table, {2: "Times this move was played out of all recorded occurrences of that position."}),
+        ):
+            for column, tip in tips.items():
+                table_widget.horizontalHeaderItem(column).setToolTip(tip)
         self.refresh()
 
     def _changed(self, *_):
@@ -240,6 +269,8 @@ class LibraryView(QWidget):
         self.export_selected.setEnabled(individual)
         self.export_filtered.setEnabled(individual)
         self.open.setText("Open source games" if view == "groups" else "Open analysis")
+        self.open.setToolTip("Open the source games for the selected move and position." if view == "groups"
+                             else "Open the selected game or finding on the analysis board.")
         self.discovery_stack.setCurrentIndex({"groups": 1, "members": 2}.get(view, 0))
         if force and request != self.wanted:
             self.rows = []

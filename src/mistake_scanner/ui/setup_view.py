@@ -39,6 +39,8 @@ class SetupDialog(QDialog):
         self.resize(755, 392)
         layout = QVBoxLayout(self)
         layout.addWidget(label("Setup and storage", "title"))
+        layout.addWidget(label("Stockfish is required to analyze games. Maia is optional and adds move probability estimates.",
+                               "muted", wrap=True))
         grid = QGridLayout()
         grid.setVerticalSpacing(14)
         layout.addLayout(grid)
@@ -46,13 +48,13 @@ class SetupDialog(QDialog):
         self.sizes = {}
 
         actions = (
-            ("Stockfish", [button("Engine Manager", lambda: self._leave(self.manage_engines.emit)),
-                           button("Validate", lambda: self._leave(self.validate_engine.emit))]),
-            ("Maia", [button("Download model", lambda: self._leave(self.setup_maia.emit, True)),
-                      button("Choose checkpoint…", lambda: self._leave(self.setup_maia.emit, False)),
-                      button("Open folder", lambda: self._open(self.model_path.parent))]),
-            ("Archive cache", [button("Open folder", lambda: self._open(self.cache_dir))]),
-            ("Analysis library", [button("Open folder", lambda: self._open(library.path.parent))]),
+            ("Stockfish", [button("Engine Manager", lambda: self._leave(self.manage_engines.emit), tip="Install or select the engine required to scan games."),
+                           button("Validate", lambda: self._leave(self.validate_engine.emit), tip="Run a short search to test your selected Stockfish.")]),
+            ("Maia", [button("Download model", lambda: self._leave(self.setup_maia.emit, True), tip="Get and verify the official Maia model."),
+                      button("Choose checkpoint…", lambda: self._leave(self.setup_maia.emit, False), tip="Choose an official Maia model file already on disk."),
+                      button("Open folder", lambda: self._open(self.model_path.parent), tip="Show the Maia model folder in your file manager.")]),
+            ("Archive cache", [button("Open folder", lambda: self._open(self.cache_dir), tip="Show the folder for compressed archive downloads.")]),
+            ("Analysis library", [button("Open folder", lambda: self._open(library.path.parent), tip="Show the folder containing the saved game database.")]),
         )
         self.validate = actions[0][1][1]
         for row, (name, controls) in enumerate(actions):
@@ -69,10 +71,10 @@ class SetupDialog(QDialog):
         grid.setColumnStretch(0, 1)
         layout.addStretch()
         footer = QHBoxLayout()
-        self.refresh_button = button("Refresh sizes", self.refresh)
+        self.refresh_button = button("Refresh sizes", self.refresh, tip="Measure current engine, model, archive, and library sizes again.")
         footer.addWidget(self.refresh_button)
         footer.addStretch()
-        footer.addWidget(button("Close", self.accept))
+        footer.addWidget(button("Close", self.accept, tip="Return to Second Look."))
         layout.addLayout(footer)
         self.refresh()
 

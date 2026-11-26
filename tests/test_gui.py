@@ -222,6 +222,11 @@ def test_first_run_storage_and_filtered_review_across_games(tmp_path, pgn, fake_
     window.runner.pool.factory = ScriptedStockfish
     window.show()
     try:
+        assert not window.windowIcon().isNull()
+        assert window.review.welcome.isVisible() and not window.review.workspace.isVisible()
+        assert "Stockfish" in window.review.scan_button.toolTip()
+        assert "UTC" in window.scanner.utc_end.toolTip()
+        assert window.browser.review_filtered.toolTip()
         assert window.review.scan_button.text() == "Set up Second Look"
         window.review.scan_button.click()
         pump(app, lambda: window.setup_dialog.task is None)
@@ -237,6 +242,7 @@ def test_first_run_storage_and_filtered_review_across_games(tmp_path, pgn, fake_
         window.library.set_setting("active_engine", fake_profile["id"])
         window.refresh_engine()
         assert window.review.scan_button.text() == "Start a scan"
+        assert "Choose a game source" in window.review.scan_button.accessibleDescription()
         pgn.write_text(SAMPLE + SAMPLE.replace("AbcD1234", "seqG1234").replace("ExampleWhite", "OtherWhite"),
                        encoding="utf-8")
         window.show_page(2)

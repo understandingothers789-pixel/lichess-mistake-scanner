@@ -50,6 +50,21 @@ def edit_rules(parent, rules):
     form = QFormLayout(dialog)
     form.addRow(label("New scans use these settings. Each engine uses one thread.", "muted", wrap=True))
     controls = {}
+    tips = {
+        "workers": "Number of games or positions Stockfish can analyze in parallel.",
+        "hash_mb": "Memory each worker can use to save search results.",
+        "discovery_depth": "Search depth for finding possible mistakes.",
+        "fast_depth": "Reduced depth used when the position has remained decisive.",
+        "detail_depth": "Search depth for confirming possible mistakes.",
+        "detail_pv": "Number of alternative lines Stockfish reports in a detailed search.",
+        "loss_cp": "Minimum loss for a normal evaluation mistake. 100 centipawns is one pawn.",
+        "decisive_cp": "Evaluation threshold for treating one side as clearly ahead.",
+        "decisive_plies": "Number of consecutive half-moves in a decisive position before fast search can start.",
+        "acceptable_cp": "How close a move’s score must be to the best move to count as similar.",
+        "first_move": "First full move number to check for mistakes.",
+        "affinity": "Assign search workers to physical CPU cores when the system supports it.",
+        "below_normal": "Use lower process priority so other apps stay responsive.",
+    }
     for field in fields(rules):
         value = getattr(rules, field.name)
         if field.name in RULE_FIELDS:
@@ -59,6 +74,8 @@ def edit_rules(parent, rules):
             name = "Assign workers to physical cores" if field.name == "affinity" else "Run below normal priority"
             widget = QCheckBox()
             widget.setChecked(value)
+        widget.setToolTip(tips[field.name])
+        widget.setAccessibleDescription(tips[field.name])
         form.addRow(name, widget)
         controls[field.name] = widget
     buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -91,8 +108,8 @@ class ScannerView(QWidget):
         outer.setSpacing(10)
         title = QHBoxLayout()
         title.addWidget(label("Scanner", "title"), 1)
-        title.addWidget(button("Search settings", self._rules))
-        title.addWidget(button("Engine Manager", self.request_engines.emit))
+        title.addWidget(button("Search settings", self._rules, tip="Adjust search depth, CPU use, and what counts as a mistake for new scans."))
+        title.addWidget(button("Engine Manager", self.request_engines.emit, tip="Install or select the Stockfish engine used for analysis."))
         outer.addLayout(title)
 
         split = QSplitter()
@@ -117,6 +134,19 @@ class ScannerView(QWidget):
         self.source = combo([("Lichess monthly archives", "archive"), ("Lichess API", "api"),
                              ("Local PGN files", "local")])
         inputs.addRow("Source", self.source)
+        self.source_help = label("", "muted", wrap=True)
+        inputs.addRow(self.source_help)
+        source_hints = {
+            "archive": "Sample public rated games by date. For a small first scan, try a game URL or a PGN file.",
+            "api": "Try one game URL, several game IDs, or a player’s public games.",
+            "local": "Pick a PGN file you already have. The app reads it in place.",
+        }
+
+        def explain_source():
+            self.source_help.setText(source_hints[self.source.currentData()])
+
+        self.source.currentIndexChanged.connect(explain_source)
+        explain_source()
         self.modes = QStackedWidget()
         inputs.addRow(self.modes)
         self.source.currentIndexChanged.connect(self.modes.setCurrentIndex)
@@ -135,7 +165,7 @@ class ScannerView(QWidget):
         first_month_row = archive_form.rowCount()
         archive_form.addRow("First month", self.first_month)
         archive_form.addRow("Last month", self.last_month)
-        archive_form.addRow(button("Browse available months", self._months))
+        archive_form.addRow(button("Browse available months", self._months, tip="Ask Lichess which monthly archives are available."))
         self.archive_day = QDateEdit(QDate.currentDate().addMonths(-1))
         self.archive_day.setDisplayFormat("yyyy-MM-dd")
         self.archive_day.setCalendarPopup(True)
@@ -144,7 +174,7 @@ class ScannerView(QWidget):
         self.batch_dates = self._field("Dates separated by commas")
         date_choices = QHBoxLayout()
         date_choices.addWidget(self.batch_dates, 1)
-        date_choices.addWidget(button("Add UTC day", self._add_batch_day))
+        date_choices.addWidget(button("Add UTC day", self._add_batch_day, tip="Add the calendar date to the batch. Edit the list to remove a date."))
         date_list_row = archive_form.rowCount()
         archive_form.addRow("Batch dates", date_choices)
         self.daily_limit = spin(250, 1, 100_000_000)
@@ -187,7 +217,7 @@ class ScannerView(QWidget):
         self.cache_location = self._field("Cache directory", library.setting("archive_cache_dir", str(self.root / "cache")))
         browse = QHBoxLayout()
         browse.addWidget(self.cache_location, 1)
-        browse.addWidget(button("Browse…", self._pick_cache))
+        browse.addWidget(button("Browse…", self._pick_cache, tip="Choose where the app stores monthly archives when caching is enabled."))
         archive_form.addRow("Cache directory", browse)
         self.cache_limit = spin(int(self.library.setting("archive_cache_gb", 1)), 1, 8192)
         self.cache_limit.setSuffix(" GB")
@@ -220,7 +250,7 @@ class ScannerView(QWidget):
         self.modes.addWidget(local)
         layout = QVBoxLayout(local)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(button("Choose PGN or PGN.ZST files…", self._pick_local))
+        layout.addWidget(button("Choose PGN or PGN.ZST files…", self._pick_local, tip="Choose one or more chess game files, including compressed PGN archives."))
         self.local_files = label("No files selected", "muted", wrap=True)
         layout.addWidget(self.local_files)
 
@@ -269,7 +299,7 @@ class ScannerView(QWidget):
         self.day_batch.toggled.connect(show_filter_dates)
         self.source.currentIndexChanged.connect(show_filter_dates)
         filters.addRow(self.clocks)
-        self.start_button = button("Start scan", self.start_scan, role="primary")
+        self.start_button = button("Start scan", self.start_scan, role="primary", tip="Read games from the selected source and analyze only those that pass your filters.")
         column_layout.addWidget(self.start_button)
         config_layout.addStretch()
 
@@ -293,7 +323,7 @@ class ScannerView(QWidget):
         self.active_scan = combo([])
         toolbar.addWidget(self.active_scan, 1)
         progress.addLayout(toolbar)
-        self.status = label("No scans yet", "label")
+        self.status = label("Choose a game source and start a scan to see progress here.", "label", wrap=True)
         self.engine_label = label("", "muted", wrap=True)
         progress.addWidget(self.status)
         progress.addWidget(self.engine_label)
@@ -326,15 +356,15 @@ class ScannerView(QWidget):
         progress.addWidget(self.transfer_label)
         self.transfer_bar = QProgressBar()
         self.transfer_bar.setAccessibleName("Source intake progress")
-        self.transfer_bar.setToolTip("Source intake progress")
+        self.transfer_bar.setToolTip("Progress reading or downloading games. Stockfish and Maia have their own status lines.")
         self.transfer_bar.setRange(0, 1000)
         self.transfer_bar.setTextVisible(False)
         self.transfer_bar.setFixedHeight(9)
         progress.addWidget(self.transfer_bar)
         control = QHBoxLayout()
-        self.pause = button("Pause", lambda: self._state("paused"))
-        self.resume = button("Resume / retry", lambda: self._state("running"))
-        self.cancel = button("Cancel", lambda: self._state("canceled"))
+        self.pause = button("Pause", lambda: self._state("paused"), tip="Pause intake and queued work. Active searches can finish.")
+        self.resume = button("Resume / retry", lambda: self._state("running"), tip="Continue from saved progress and retry failed work.")
+        self.cancel = button("Cancel", lambda: self._state("canceled"), tip="Stop this scan. Finished analysis stays in the library.")
         for item in (self.pause, self.resume, self.cancel):
             control.addWidget(item)
         control.addStretch()
@@ -360,15 +390,65 @@ class ScannerView(QWidget):
         self.model_location.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         maia_form.addRow(self.model_location)
         buttons = QHBoxLayout()
-        self.download_model = button("Download model", self._maia_download)
-        self.choose_model = button("Choose checkpoint…", self._maia_choose)
+        self.download_model = button("Download model", self._maia_download, tip="Download and verify the official Maia checkpoint. Stockfish can scan while Maia is unavailable.")
+        self.choose_model = button("Choose checkpoint…", self._maia_choose, tip="Select an existing official maia3-79m.pt file.")
         buttons.addWidget(self.download_model)
         buttons.addWidget(self.choose_model)
-        buttons.addWidget(button("Open model folder", self._open_model_folder))
+        buttons.addWidget(button("Open model folder", self._open_model_folder, tip="Open the folder containing the selected or default Maia model."))
         buttons.addStretch()
         maia_form.addRow(buttons)
         progress_layout.addWidget(maia_card)
         progress_layout.addStretch()
+        for control, tip in (
+            (self.source, "Choose a monthly archive, the Lichess game export service, or a file on your computer."),
+            (self.first_month, "First archive month to read, in YYYY-MM format."),
+            (self.last_month, "Last archive month to read, in YYYY-MM format. Use the same month for one archive."),
+            (self.single_day, "Analyze games started on one UTC date from its monthly archive."),
+            (self.day_batch, "Scan several UTC dates in one pass per month with a separate game limit per day."),
+            (self.archive_day, "Choose a calendar date in UTC. In batch mode, press Add UTC day to keep it."),
+            (self.batch_dates, "Enter UTC dates in YYYY-MM-DD format, separated by commas."),
+            (self.daily_limit, "Maximum number of matching games selected for each date in this batch."),
+            (self.utc_start, "Earliest UTC game start time on the selected date. Leave blank to begin at 00:00."),
+            (self.utc_end, "UTC cutoff for game starts. Games must start before this time. Use 24:00 to include the final minute."),
+            (self.cache_mode, "Save the compressed monthly archive for reuse. Leave unchecked to stream it without storing it."),
+            (self.cache_location, "Folder for saved monthly archive files."),
+            (self.cache_limit, "Maximum space for managed archive files. Library, engine, and model files are separate."),
+            (self.delete_cache, "Remove this cached archive after intake finishes. Saved analysis stays in the library."),
+            (self.api_mode, "Choose whether to look up games by player, game IDs, or a game URL."),
+            (self.api_value, "Enter a Lichess username, comma-separated game IDs, or a Lichess game URL as selected above."),
+            (self.api_opponent, "Optional. Only download games against this Lichess account."),
+            (self.api_color, "Optional. Choose which side the named player played."),
+            (self.api_max, "Maximum games fetched from Lichess before local filters are applied."),
+            (self.rating_min, "Lowest allowed player rating. Any leaves the lower limit open."),
+            (self.rating_max, "Highest allowed player rating. Any leaves the upper limit open."),
+            (self.rating_mode, "Choose whether both players or either player must be within the rating range."),
+            (self.rated, "Choose rated games, casual games, or both. Monthly archives contain rated games."),
+            (self.tc, "Enter the exact starting time in seconds plus increment, such as 600+5 for 10 minutes plus 5 seconds per move."),
+            (self.since, "Earliest UTC game date to include, in YYYY-MM-DD format."),
+            (self.until, "Latest UTC game date to include, in YYYY-MM-DD format."),
+            (self.user, "Keep only games involving this player."),
+            (self.opening, "Keep games whose opening name contains this text."),
+            (self.eco, "Filter by an opening classification code, such as C20."),
+            (self.game_limit, "Maximum number of games selected after filtering. Start with a small number for a quick test."),
+            (self.clocks, "Keep only games that contain at least one recorded clock time."),
+            (self.active_scan, "Select a current or previous scan to see its progress and controls."),
+            (self.day_counts, "See how many matching games have been selected for each date."),
+            (self.recent_errors, "Read errors from the selected scan or the background workers."),
+        ):
+            control.setToolTip(tip)
+            control.setAccessibleDescription(tip)
+        for speed, control in self.speeds.items():
+            control.setToolTip(f"Include {speed} games. Leave all categories unchecked to include every speed.")
+        for value, tip in zip(self.metrics.values(), (
+            "Game records read from the source, including games excluded by filters.",
+            "Games that matched your filters and were queued for Stockfish.",
+            "Games that finished the initial Stockfish search.",
+            "Possible mistakes sent for a deeper Stockfish check.",
+            "Mistakes confirmed by the deeper Stockfish search.",
+            "Verified findings with finished Maia predictions.",
+        ), strict=True):
+            value.setToolTip(tip)
+            value.parentWidget().setToolTip(tip)
         self.refresh()
 
     def _form(self, name):

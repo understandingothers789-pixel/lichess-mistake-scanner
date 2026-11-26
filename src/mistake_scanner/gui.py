@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import ctypes
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QTimer, Qt
-from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QByteArray, QSize, QTimer, Qt
+from PySide6.QtGui import QAction, QIcon, QKeySequence
+from PySide6.QtWidgets import QApplication, QDialog, QHBoxLayout, QMainWindow, QStackedWidget, QVBoxLayout, QWidget
 
 from .database import Library
 from .maia import CHECKPOINT_NAME
@@ -17,6 +18,8 @@ from .ui.review import Review
 from .ui.scanner_view import ScannerView
 from .ui.setup_view import SetupDialog
 from .ui.theme import Task, button, error, label, style_application
+
+APP_ICON = Path(__file__).with_name("assets") / "second-look.png"
 
 
 class Window(QMainWindow):
@@ -36,6 +39,7 @@ class Window(QMainWindow):
         self.allowed_to_close = False
         self.close_requested = False
         self.setWindowTitle(APP_NAME + " · Lichess Mistake Scanner")
+        self.setWindowIcon(QIcon(str(APP_ICON)))
         self.resize(1420, 930)
         self.setMinimumSize(900, 665)
 
@@ -49,24 +53,29 @@ class Window(QMainWindow):
         top = QHBoxLayout(toolbar)
         top.setContentsMargins(16, 6, 16, 6)
         top.setSpacing(10)
-        mark = label("♞")
-        mark.setObjectName("mark")
+        mark = label()
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mark.setFixedSize(30, 30)
+        mark.setFixedSize(32, 32)
+        mark.setPixmap(self.windowIcon().pixmap(QSize(32, 32), mark.devicePixelRatioF()))
         top.addWidget(mark)
         top.addWidget(label(APP_NAME, "brand"))
         top.addSpacing(21)
         self.nav = []
-        for index, title in enumerate(("Analysis", "Library", "Scanner")):
-            nav = button(title, lambda _=False, i=index: self.show_page(i), role="nav")
+        pages = (
+            ("Analysis", "Play through a game and explore Stockfish lines (Ctrl+1)."),
+            ("Library", "Find analyzed games and interesting moves (Ctrl+2)."),
+            ("Scanner", "Import games and track analysis (Ctrl+3)."),
+        )
+        for index, (title, tip) in enumerate(pages):
+            nav = button(title, lambda _=False, i=index: self.show_page(i), role="nav", tip=tip)
             nav.setCheckable(True)
             self.nav.append(nav)
             top.addWidget(nav)
         top.addStretch()
         self.engine_status = label("", "label")
         top.addWidget(self.engine_status)
-        top.addWidget(button("Engines", self.engines))
-        top.addWidget(button("Setup && storage", self.setup))
+        top.addWidget(button("Engines", self.engines, tip="Install, select, test, or remove a Stockfish build."))
+        top.addWidget(button("Setup && storage", self.setup, tip="Set up Stockfish and Maia and see how much disk space they use."))
         layout.addWidget(toolbar)
 
         self.pages = QStackedWidget()
@@ -108,6 +117,9 @@ class Window(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(callback)
             navigation.addAction(action)
+        help_menu = self.menuBar().addMenu("Help")
+        quick_start = help_menu.addAction("Quick start", self._quick_start)
+        quick_start.setShortcut(QKeySequence("F1"))
 
         self.statusBar().showMessage("Ready")
         geometry = self.library.setting("window_geometry")
@@ -126,6 +138,28 @@ class Window(QMainWindow):
 
     def show_status(self, value):
         self.statusBar().showMessage(value, 9500)
+
+    def _quick_start(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Second Look quick start")
+        dialog.resize(580, 400)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(label("Quick start", "title"))
+        for title, description in (
+            ("Set up Stockfish", "Open Setup & storage, then Engine Manager. Download a build or select an existing executable. "
+             "Stockfish looks for mistakes. Maia is optional and estimates how often a player at a given rating might make a move."),
+            ("Scan a few games", "In Scanner, choose Lichess API for a game URL or Local PGN files for a saved game. "
+             "Start with a small game limit. Use monthly archives to sample a date or a UTC time window."),
+            ("Open a finding", "Go to Library → Discoveries and double-click a move. Scroll over the board or use the arrow keys to go through the game. "
+             "Hover over a Stockfish line to preview it, or click it to explore it on the main board."),
+            ("Read the scores", "Positive evaluations favor White and negative ones favor Black. "
+             "Use Compare move to check any move with a fresh Stockfish search. Maia percentages are predictions."),
+        ):
+            layout.addWidget(label(title, "section"))
+            layout.addWidget(label(description, "muted", wrap=True))
+        layout.addStretch()
+        layout.addWidget(button("Close", dialog.accept, tip="Return to Second Look."))
+        dialog.exec()
 
     def show_page(self, index):
         self.pages.setCurrentIndex(index)
@@ -205,6 +239,9 @@ class Window(QMainWindow):
         self.engine_status.setText(selected["name"] if selected else "No engine selected")
         self.engine_status.setToolTip(selected.get("commit") or selected["path"] if selected else "Open Engine Manager to select Stockfish")
         self.review.scan_button.setText("Start a scan" if selected else "Set up Second Look")
+        tip = "Choose a game source and start analyzing games." if selected else "Open setup to install or select Stockfish."
+        self.review.scan_button.setToolTip(tip)
+        self.review.scan_button.setAccessibleDescription(tip)
         if self.review.live_button.isChecked():
             self.review._render()
 
@@ -294,8 +331,11 @@ class Window(QMainWindow):
 
 
 def launch(root: Path) -> int:
+    if sys.platform == "win32":
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SecondLook.LichessMistakeScanner")
     app = QApplication.instance() or QApplication([sys.argv[0]])
     app.setApplicationName(APP_NAME)
+    app.setWindowIcon(QIcon(str(APP_ICON)))
     style_application(app)
     try:
         window = Window(root)

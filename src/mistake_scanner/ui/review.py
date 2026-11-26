@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor, QCursor, QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog,
-    QLabel, QMainWindow, QScrollArea, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QLabel, QMainWindow, QScrollArea, QSizePolicy, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ..analysis import retained_outcome
@@ -115,6 +115,7 @@ class Review(QWidget):
         self.comparison_timer.setInterval(100)
         self.comparison_timer.timeout.connect(self._poll_comparison)
         self.game = None
+        self.explore = False
         self.scan = None
         self.moments = []
         self.current = None
@@ -138,22 +139,60 @@ class Review(QWidget):
         titles = QVBoxLayout()
         titles.setSpacing(2)
         self.heading = label("Analysis workspace", "title")
-        self.context = label("Browse your library or start a scan to add games.", "muted")
+        self.context = label("", "muted")
         titles.addWidget(self.heading)
         titles.addWidget(self.context)
         header.addLayout(titles, 1)
-        self.open_source = button("Lichess game ↗", self._open_source)
+        self.open_source = button("Lichess game ↗", self._open_source, tip="Open the game at this move on Lichess.")
         self.reanalysis_button = button("Reanalyze", lambda: self.reanalyze.emit(self.game["scan_game"]),
                                         tip="Analyze this game as a new scan with the selected engine")
         self.live_button = button("Live Stockfish", tip="Analyze the position currently on the board")
         self.live_button.setCheckable(True)
         self.live_button.toggled.connect(self._toggle_live)
-        self.export_button = button("Export", self._export)
-        self.library_button = button("Open library", self.open_library.emit)
-        self.scan_button = button("Start a scan", self.open_scanner.emit, role="primary")
-        for control in (self.open_source, self.live_button, self.reanalysis_button, self.export_button, self.library_button, self.scan_button):
+        self.export_button = button("Export", self._export, tip="Save this game or its analysis to a file.")
+        self.library_button = button("Open library", self.open_library.emit, tip="Browse previously analyzed games and findings.")
+        self.scan_button = button("Start a scan", self.open_scanner.emit, role="primary",
+                                  tip="Choose a source and scan games for mistakes.")
+        for control in (self.open_source, self.live_button, self.reanalysis_button, self.export_button):
             header.addWidget(control)
         outer.addLayout(header)
+
+        self.welcome = QWidget()
+        welcome_layout = QVBoxLayout(self.welcome)
+        welcome_layout.addStretch(1)
+        welcome_card = QFrame()
+        welcome_card.setObjectName("card")
+        welcome_card.setMinimumWidth(520)
+        welcome_card.setMaximumWidth(640)
+        guide = QVBoxLayout(welcome_card)
+        guide.setContentsMargins(26, 24, 26, 24)
+        guide.setSpacing(10)
+        guide.addWidget(label("Find a game to review", "title"))
+        for title, description in (
+            ("Set up Stockfish", "Stockfish finds mistakes. You can add Maia later to estimate how likely players are to make them."),
+            ("Scan a small sample", "Try a Lichess game URL or a PGN file. Scanner shows progress as each game is analyzed."),
+            ("Open a result", "Double-click a finding in Library → Discoveries. Scroll over the board to step through the moves."),
+        ):
+            guide.addWidget(label(title, "section"))
+            detail = label(description, "muted", wrap=True)
+            policy = detail.sizePolicy()
+            policy.setVerticalPolicy(QSizePolicy.Policy.Minimum)
+            detail.setSizePolicy(policy)
+            guide.addWidget(detail)
+        actions = QHBoxLayout()
+        actions.addWidget(self.scan_button)
+        actions.addWidget(self.library_button)
+        actions.addWidget(button("Explore the board", self._explore_board,
+                                 tip="Play moves from the starting position without importing a game."))
+        actions.addStretch()
+        guide.addLayout(actions)
+        welcome_row = QHBoxLayout()
+        welcome_row.addStretch(1)
+        welcome_row.addWidget(welcome_card, 3)
+        welcome_row.addStretch(1)
+        welcome_layout.addLayout(welcome_row)
+        welcome_layout.addStretch(1)
+        outer.addWidget(self.welcome, 1)
 
         self.workspace = QMainWindow()
         self.workspace.setDockNestingEnabled(True)
@@ -168,6 +207,7 @@ class Review(QWidget):
         self.top_player = label("♚  Black", "label")
         self.bottom_player = label("♚  White", "label")
         self.board = BoardWidget()
+        self.board.setToolTip("Scroll down for the next move or up for the previous move. Click a piece and a destination to try a move.")
         self.board.move_played.connect(self._scratch)
         self.board.steps_requested.connect(self.advance)
         board_layout.addWidget(self.top_player)
@@ -182,9 +222,10 @@ class Review(QWidget):
         review_controls.setContentsMargins(0, 0, 0, 0)
         self.review_progress = label("", "label")
         review_controls.addWidget(self.review_progress, 1)
-        self.mark_next = button("Mark reviewed && next", self.review_next.emit, role="primary")
+        self.mark_next = button("Mark reviewed && next", self.review_next.emit, role="primary",
+                                tip="Save this item as reviewed and go to the next matching result.")
         review_controls.addWidget(self.mark_next)
-        review_controls.addWidget(button("Stop review", self.review_stop.emit))
+        review_controls.addWidget(button("Stop review", self.review_stop.emit, tip="End the review list and stay on this game."))
         self.review_bar.hide()
         board_layout.addWidget(self.review_bar)
         controls = QHBoxLayout()
@@ -211,6 +252,7 @@ class Review(QWidget):
         chart_layout = QVBoxLayout(chart_box)
         chart_layout.setContentsMargins(4, 2, 7, 4)
         self.graph = EvalGraph()
+        self.graph.setToolTip("Click the graph to jump to a move. Higher values favor White and lower values favor Black.")
         self.graph.selected.connect(self.go)
         chart_layout.addWidget(self.graph)
         legend = label("White perspective · Dotted: fast · Teal: detailed · Amber: finding", "muted", wrap=True)
@@ -232,8 +274,8 @@ class Review(QWidget):
         position.addWidget(self.position_eval)
         analysis_layout.addLayout(position)
         phase = QHBoxLayout()
-        self.before = button("Before move", lambda: self._phase(False))
-        self.after = button("After move", lambda: self._phase(True))
+        self.before = button("Before move", lambda: self._phase(False), tip="See the choices available before this move was played.")
+        self.after = button("After move", lambda: self._phase(True), tip="See the position and possible replies after the move.")
         self.before.setCheckable(True)
         self.after.setCheckable(True)
         phase.addWidget(self.before)
@@ -249,6 +291,13 @@ class Review(QWidget):
         analysis_layout.addWidget(self.scan_decision)
         analysis_layout.addWidget(self.comparison_status)
         self.line_table = table(["Move", "Eval", "Continuation", "Depth", "Maia"])
+        self.line_table.setToolTip("Hover a line for a small board preview. Click a line to play it on the main board.")
+        for column, tip in enumerate((
+            "First move in the suggested line.", "Positive scores favor White. Negative scores favor Black.",
+            "Moves Stockfish expects after the first move.", "How far Stockfish searched, in half-moves.",
+            "How likely Maia predicts a player at the shown rating would choose this move.",
+        )):
+            self.line_table.horizontalHeaderItem(column).setToolTip(tip)
         self.line_table.horizontalHeader().setStretchLastSection(False)
         for index, width in enumerate((64, 60, 190, 51, 62)):
             self.line_table.setColumnWidth(index, width)
@@ -265,8 +314,9 @@ class Review(QWidget):
         analysis_layout.addWidget(self.summary)
         analysis_layout.addWidget(self.maia)
         options = QHBoxLayout()
-        self.all_policy = button("All Maia moves", self._policy)
-        self.occurrences = button("Position occurrences", self._occurrences)
+        self.all_policy = button("All Maia moves", self._policy, tip="See Maia’s predicted chances for every legal move.")
+        self.occurrences = button("Position occurrences", self._occurrences,
+                                  tip="Find other games in your library that reached this position.")
         options.addWidget(self.all_policy)
         options.addWidget(self.occurrences)
         options.addStretch()
@@ -279,6 +329,7 @@ class Review(QWidget):
         score_layout.setContentsMargins(7, 6, 7, 6)
         score_layout.setSpacing(4)
         self.moves = QTreeWidget()
+        self.moves.setToolTip("Click either player's move to jump there. Expand branches to see saved variations.")
         self.moves.setAccessibleName("Annotated PGN move list")
         self.moves.setHeaderLabels(["#", "White", "Eval", "Black", "Eval"])
         self.moves.setAlternatingRowColors(True)
@@ -295,8 +346,8 @@ class Review(QWidget):
         self.moves.itemClicked.connect(self._score_clicked)
         score_layout.addWidget(self.moves, 1)
         review_tools = QHBoxLayout()
-        self.bookmark = button("Bookmark game", lambda: self._review("bookmarked", True))
-        self.reviewed = button("Mark reviewed", lambda: self._review("reviewed", True))
+        self.bookmark = button("Bookmark game", lambda: self._review("bookmarked", True), tip="Toggle this game’s bookmark in the Library.")
+        self.reviewed = button("Mark reviewed", lambda: self._review("reviewed", True), tip="Toggle the reviewed status for the full game.")
         review_tools.addWidget(self.bookmark)
         review_tools.addWidget(self.reviewed)
         review_tools.addStretch()
@@ -310,6 +361,7 @@ class Review(QWidget):
         moment_layout.setContentsMargins(7, 6, 7, 6)
         moment_layout.setSpacing(4)
         self.moment_table = table(["Move", "Finding", "Maia"])
+        self.moment_table.setToolTip("Click a finding to jump to the position before the mistake or missed reply.")
         self.moment_table.setColumnWidth(0, 92)
         self.moment_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.moment_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -317,8 +369,9 @@ class Review(QWidget):
         self.moment_table.setMinimumHeight(80)
         moment_layout.addWidget(self.moment_table)
         tools = QHBoxLayout()
-        self.bookmark_moment = button("Bookmark moment", lambda: self._review("bookmarked", False))
-        self.review_moment = button("Review moment", lambda: self._review("reviewed", False))
+        self.bookmark_moment = button("Bookmark moment", lambda: self._review("bookmarked", False),
+                                      tip="Toggle this finding’s bookmark in the Library.")
+        self.review_moment = button("Review moment", lambda: self._review("reviewed", False), tip="Toggle the reviewed status for this finding.")
         tools.addWidget(self.bookmark_moment)
         tools.addWidget(self.review_moment)
         tools.addStretch()
@@ -538,7 +591,17 @@ class Review(QWidget):
             for col, value in enumerate((number, status + reason, _prob(moment["probability"]))):
                 self.moment_table.setItem(row, col, cell(value, AMBER if col == 1 else None, NAMES[moment["state"]]))
 
+    def _explore_board(self):
+        self.explore = True
+        self._render()
+
     def _render(self):
+        has_board = self.game is not None or self.explore
+        self.welcome.setVisible(not has_board)
+        self.workspace.setVisible(has_board)
+        self.live_button.setVisible(has_board)
+        self.heading.setVisible(has_board)
+        self.context.setVisible(self.game is not None)
         self.variation_preview.dismiss()
         board = self._root()
         if self.branch:
@@ -630,8 +693,6 @@ class Review(QWidget):
         self.open_source.setVisible(bool(self.game and (self.game["site"] or "").startswith("https://lichess.org/")))
         self.reanalysis_button.setVisible(bool(self.game))
         self.export_button.setVisible(bool(self.game))
-        self.library_button.setVisible(self.game is None)
-        self.scan_button.setVisible(self.game is None)
         self.bookmark.setEnabled(self.game is not None)
         self.reviewed.setEnabled(self.game is not None)
         self.bookmark_moment.setEnabled(moment is not None)

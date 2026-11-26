@@ -38,7 +38,6 @@ QLabel[role="maia"] { color: #c2a7eb; font-size: 12px; font-weight: 600; }
 QLabel[role="eval"] { color: #8ed5ef; background: #1b2633; border: 1px solid #2a394a;
     border-radius: 6px; padding: 4px 8px; font-size: 17px; font-weight: 650; }
 QLabel[role="amber"] { color: #e5af76; }
-QLabel#mark { color: #112d29; background: #88cfc0; border-radius: 7px; font: 25px 'Segoe UI Symbol', 'DejaVu Sans'; }
 QPushButton, QToolButton {
     background: #222e3c; color: #dce5ef; border: 1px solid #344559;
     border-radius: 6px; padding: 6px 11px; min-height: 18px;
@@ -121,7 +120,9 @@ def button(text: str, callback: Callable | None = None, *, role: str = "", tip="
         widget.clicked.connect(callback)
     if tip:
         widget.setToolTip(tip)
-        widget.setAccessibleName(tip)
+        widget.setAccessibleDescription(tip)
+        if not any(character.isalnum() for character in text):
+            widget.setAccessibleName(tip)
     return widget
 
 

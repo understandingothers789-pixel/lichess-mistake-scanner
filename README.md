@@ -2,7 +2,7 @@
 
 Second Look is a standalone Windows x64 desktop application for finding chess mistakes in Lichess games. It streams games, records Stockfish analysis in a local SQLite library, and uses Maia 3 79M to rank verified mistakes by how likely a human at the relevant rating was to play them. Open a discovery to see its game, engine lines, and probabilities immediately.
 
-[**Download Second Look v0.1.13 for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.13/SecondLook-windows-x64.zip) · [**Download the Python edition**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.13/SecondLook-Python.zip) · [What changed in v0.1.13](CHANGELOG.md#v0113)
+[**Download Second Look v0.1.14 for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.14/SecondLook-windows-x64.zip) · [**Download the Python edition**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.14/SecondLook-Python.zip) · [What changed in v0.1.14](CHANGELOG.md#v0114)
 
 The Windows release includes the Maia CPU runtime. Extract the whole ZIP, launch SecondLook.exe, then use **Scanner → Download model** to fetch the verified checkpoint.
 
@@ -37,6 +37,8 @@ Without the optional Maia runtime, omit `-WithMaia`. Stockfish verification work
 The default Maia checkpoint is `%LOCALAPPDATA%\LichessMistakeScanner\models\maia3-79m.pt`. Scanner shows the actual configured path. **Open model folder** opens its folder, and **Choose checkpoint** starts at that path. **Ready** means a checkpoint is configured. **Waiting** counts Maia jobs still queued, separate from jobs **in progress** and **complete**. Pausing prevents new jobs from starting while active Stockfish work can finish and queue more Maia jobs.
 
 The library, engine profiles, sources, and model use a separate `LichessMistakeScanner` application data directory under `%LOCALAPPDATA%` on Windows. The `--data-dir PATH` option selects a different library. The application has no dependency on Nocturne.
+
+Open **Help → Quick start** (F1) for help with setup, your first scan, and reading the analysis. Hover over controls and table headings for explanations.
 
 ## Game sources
 

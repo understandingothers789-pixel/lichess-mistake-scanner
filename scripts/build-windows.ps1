@@ -14,7 +14,7 @@ try {
 
     $version = & $python -c "from mistake_scanner import __version__; print(__version__)"
     if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Could not determine the package version.' }
-    $options = @('--noconfirm', '--clean', '--windowed', '--onedir', '--name', 'SecondLook', '--paths', 'src', '--collect-data', 'mistake_scanner')
+    $options = @('--noconfirm', '--clean', '--windowed', '--onedir', '--name', 'SecondLook', '--icon', 'src/mistake_scanner/assets/second-look.ico', '--paths', 'src', '--collect-data', 'mistake_scanner')
     if ($WithMaia) {
         & $python -c "import maia3,torch"
         if ($LASTEXITCODE -ne 0) { throw 'Run setup-windows.ps1 -WithMaia before building with Maia.' }

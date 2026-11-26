@@ -1,5 +1,10 @@
 # What changed
 
+## v0.1.14
+
+- Redesigned the app icon with a coral magnifier and chess squares for the toolbar, window, and Windows executable.
+- Added a first-launch guide, Help → Quick start, and tooltips throughout Scanner, Library, Analysis, and engine setup.
+
 ## v0.1.13
 
 - Filter single-day scans and date batches by a UTC game-start window with minute precision.
