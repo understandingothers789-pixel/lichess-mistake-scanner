@@ -89,12 +89,17 @@ END;
 PRAGMA user_version=4;
 """
 
-DISCOVERY_COLUMNS = """
-    mistakes.*, scan_games.scan_id, games.white, games.black, games.white_elo,
+MISSED_REPLY = """
+    EXISTS (SELECT 1 FROM mistakes prior WHERE prior.scan_game=mistakes.scan_game
+            AND prior.ply=mistakes.ply-1 AND prior.state IN ('verified','awaiting_maia','complete')
+            AND json_extract(prior.detail, '$.punishment.missed')=1)
+"""
+
+DISCOVERY_METADATA = f"""
+    scan_games.scan_id, games.white, games.black, games.white_elo,
     games.black_elo, games.opening, games.eco, games.speed, games.day, jobs.state AS detail_state,
     COALESCE(position_frequency.count, 0) AS observed,
-    EXISTS (SELECT 1 FROM mistakes prior WHERE prior.scan_game=mistakes.scan_game
-            AND prior.ply=mistakes.ply-1 AND prior.state IN ('verified','awaiting_maia','complete')) AS missed
+    {MISSED_REPLY} AS missed
 """
 
 
@@ -163,6 +168,11 @@ class Library:
         if db is not None:
             db.close()
             del self.local.db
+
+    def change_token(self) -> tuple[int, int]:
+        db = self.connection()
+        # data_version changes for other connections; total_changes covers this one.
+        return db.execute("PRAGMA data_version").fetchone()[0], db.total_changes
 
     @contextmanager
     def transaction(self):
@@ -248,6 +258,11 @@ class Library:
             "SELECT * FROM scans ORDER BY id DESC LIMIT ?", (limit,),
         )]
 
+    def scan_choices(self, limit: int = 100) -> list[tuple]:
+        return [tuple(row) for row in self.connection().execute(
+            "SELECT id, name, state FROM scans ORDER BY id DESC LIMIT ?", (limit,),
+        )]
+
     def scan(self, identity: int) -> dict | None:
         return _decoded(self.connection().execute("SELECT * FROM scans WHERE id=?", (identity,)).fetchone(),
                         "filters", "rules", "profile")
@@ -274,12 +289,15 @@ class Library:
                 db.execute("UPDATE jobs SET state='pending', error=NULL WHERE scan_id=? AND state='failed'", (scan_id,))
 
     def ready_source(self) -> dict | None:
+        query = """
+            SELECT sources.* FROM sources JOIN scans ON scans.id=sources.scan_id
+            WHERE sources.state='pending' AND scans.state='running'
+            AND (scans.game_limit=0 OR scans.selected<scans.game_limit) ORDER BY sources.id LIMIT 1
+        """
+        if self.connection().execute(query).fetchone() is None:
+            return None
         with self.transaction() as db:
-            item = db.execute("""
-                SELECT sources.* FROM sources JOIN scans ON scans.id=sources.scan_id
-                WHERE sources.state='pending' AND scans.state='running'
-                AND (scans.game_limit=0 OR scans.selected<scans.game_limit) ORDER BY sources.id LIMIT 1
-            """).fetchone()
+            item = db.execute(query).fetchone()
             if item is not None:
                 db.execute("UPDATE sources SET state='running', error=NULL WHERE id=?", (item["id"],))
             return _decoded(item, "spec")
@@ -287,6 +305,12 @@ class Library:
     def source_state(self, identity: int, state: str, error: str | None = None) -> None:
         with self.transaction() as db:
             db.execute("UPDATE sources SET state=?, error=? WHERE id=?", (state, error, identity))
+
+    def source_cursor(self, identity: int) -> int:
+        return self.connection().execute("SELECT seen FROM sources WHERE id=?", (identity,)).fetchone()[0]
+
+    def intake_status(self, scan_id: int) -> sqlite3.Row:
+        return self.connection().execute("SELECT state, game_limit, selected FROM scans WHERE id=?", (scan_id,)).fetchone()
 
     def checkpoint(self, identity: int, index: int, skipped: int, malformed: int) -> None:
         with self.transaction() as db:
@@ -313,16 +337,19 @@ class Library:
         return True
 
     def claim(self, stage: str) -> dict | None:
+        query = """
+            SELECT jobs.* FROM jobs JOIN scans ON scans.id=jobs.scan_id
+            WHERE jobs.stage=? AND jobs.state='pending' AND scans.state='running'
+            AND (jobs.stage='maia' OR (
+                SELECT COUNT(*) FROM jobs AS active
+                WHERE active.scan_id=jobs.scan_id AND active.state='running' AND active.stage!='maia'
+            ) < json_extract(scans.rules, '$.workers'))
+            ORDER BY jobs.id LIMIT 1
+        """
+        if self.connection().execute(query, (stage,)).fetchone() is None:
+            return None
         with self.transaction() as db:
-            job = db.execute("""
-                SELECT jobs.* FROM jobs JOIN scans ON scans.id=jobs.scan_id
-                WHERE jobs.stage=? AND jobs.state='pending' AND scans.state='running'
-                AND (jobs.stage='maia' OR (
-                    SELECT COUNT(*) FROM jobs AS active
-                    WHERE active.scan_id=jobs.scan_id AND active.state='running' AND active.stage!='maia'
-                ) < json_extract(scans.rules, '$.workers'))
-                ORDER BY jobs.id LIMIT 1
-            """, (stage,)).fetchone()
+            job = db.execute(query, (stage,)).fetchone()
             if job is None:
                 return None
             db.execute("UPDATE jobs SET state='running', attempts=attempts+1, error=NULL WHERE id=?", (job["id"],))
@@ -370,6 +397,10 @@ class Library:
     def cached_search(self, identity: str) -> list[Variation] | None:
         row = self.connection().execute("SELECT lines FROM searches WHERE id=?", (identity,)).fetchone()
         return [Variation.load(line) for line in json.loads(row[0])] if row else None
+
+    def first_cached_line(self, identity: str) -> Variation | None:
+        row = self.connection().execute("SELECT json_extract(lines, '$[0]') FROM searches WHERE id=?", (identity,)).fetchone()
+        return Variation.load(json.loads(row[0])) if row and row[0] else None
 
     def save_search(self, identity: str, lines: list[Variation]) -> list[Variation]:
         with self.transaction() as db:
@@ -436,6 +467,17 @@ class Library:
                 for row in self.connection().execute(
                     "SELECT ply, score, depth FROM evaluations WHERE scan_game=? ORDER BY ply", (scan_game,),
                 )}
+
+    def review_signature(self, scan_game: int) -> tuple:
+        db = self.connection()
+        flags = tuple(db.execute("SELECT reviewed, bookmarked FROM scan_games WHERE id=?", (scan_game,)).fetchone())
+        plies = db.execute("SELECT max(ply) FROM evaluations WHERE scan_game=?", (scan_game,)).fetchone()[0]
+        moments = tuple(tuple(row) for row in db.execute("""
+            SELECT mistakes.id, mistakes.state, probability, reviewed, bookmarked, jobs.state
+            FROM mistakes LEFT JOIN jobs ON jobs.stage='detail' AND jobs.target=mistakes.id
+            WHERE scan_game=? AND mistakes.state!='rejected' ORDER BY ply
+        """, (scan_game,)))
+        return flags, plies, moments
 
     def mistake(self, identity: int) -> dict | None:
         return _decoded(self.connection().execute("SELECT * FROM mistakes WHERE id=?", (identity,)).fetchone(),
@@ -513,22 +555,18 @@ class Library:
 
     def game_page(self, query="", offset=0, limit=100, **options) -> list[dict]:
         source, args, order = self._game_query(query, **options)
-        rows = self.connection().execute(f"""
+        return [dict(row) for row in self.connection().execute(f"""
             SELECT scan_games.*, games.white, games.black, games.white_elo, games.black_elo,
                    games.result, games.day, games.speed, games.time_control, games.opening, games.eco,
-                   jobs.state AS analysis_state
+                   jobs.state AS analysis_state,
+                   (SELECT count(*) FROM mistakes WHERE scan_game=scan_games.id
+                     AND state IN ('verified','awaiting_maia','complete')) AS moments,
+                   (SELECT count(*) FROM mistakes WHERE scan_game=scan_games.id
+                     AND state IN ('candidate','awaiting_maia')) AS pending,
+                   (SELECT count(*) FROM mistakes WHERE scan_game=scan_games.id
+                     AND state IN ('verified','awaiting_maia','complete') AND {MISSED_REPLY}) AS missed
             {source} ORDER BY {order} LIMIT ? OFFSET ?
-        """, [*args, limit, offset])
-        games = []
-        for row in rows:
-            item = dict(row)
-            moments = self.moments(row["id"])
-            verified = {m["ply"] for m in moments if m["state"] != "candidate"}
-            item["moments"] = len(verified)
-            item["missed"] = sum(ply - 1 in verified for ply in verified)
-            item["pending"] = sum(m["state"] in ("candidate", "awaiting_maia") for m in moments)
-            games.append(item)
-        return games
+        """, [*args, limit, offset])]
 
     def _discovery_query(
         self, query="", *, sort="probability", pending=False,
@@ -583,8 +621,17 @@ class Library:
     def discovery_page(self, query="", offset=0, limit=100, **options) -> list[dict]:
         source, args, order = self._discovery_query(query, **options)
         return [_decoded(row, "discovery", "detail") for row in self.connection().execute(
-            f"SELECT {DISCOVERY_COLUMNS} {source} ORDER BY {order} LIMIT ? OFFSET ?", [*args, limit, offset],
+            f"SELECT mistakes.*, {DISCOVERY_METADATA} {source} ORDER BY {order} LIMIT ? OFFSET ?", [*args, limit, offset],
         )]
+
+    def discovery_browser_page(self, query="", offset=0, limit=100, **options) -> list[dict]:
+        source, args, order = self._discovery_query(query, **options)
+        return [dict(row) for row in self.connection().execute(f"""
+            SELECT mistakes.id, mistakes.scan_game, mistakes.ply, mistakes.position, mistakes.played,
+                   mistakes.state, mistakes.loss_cp, mistakes.clock, mistakes.probability, mistakes.bookmarked,
+                   json_extract(games.payload, '$.root') AS root, {DISCOVERY_METADATA}
+            {source} ORDER BY {order} LIMIT ? OFFSET ?
+        """, [*args, limit, offset])]
 
     def review_ids(self, kind: str, options: dict) -> array:
         if kind == "games":
@@ -648,14 +695,12 @@ class Library:
         return {"sources": sources, "jobs": jobs, "errors": errors}
 
     def settle(self) -> None:
-        db = self.connection()
-        finished = db.execute("""
-            SELECT id FROM scans WHERE state='running'
+        eligible = """
+            state='running'
             AND (game_limit>0 AND selected>=game_limit OR NOT EXISTS (
                  SELECT 1 FROM sources WHERE scan_id=scans.id AND state!='done'))
             AND NOT EXISTS (SELECT 1 FROM jobs WHERE scan_id=scans.id AND state!='done')
-        """).fetchall()
-        if finished:
+        """
+        if self.connection().execute(f"SELECT 1 FROM scans WHERE {eligible} LIMIT 1").fetchone():
             with self.transaction() as writer:
-                writer.executemany("UPDATE scans SET state='complete' WHERE id=? AND state='running'",
-                                   [(r["id"],) for r in finished])
+                writer.execute(f"UPDATE scans SET state='complete' WHERE {eligible}")

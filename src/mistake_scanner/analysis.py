@@ -157,7 +157,13 @@ class EngineWorkers:
     def acquire(self, profile: dict, rules: SearchSettings) -> UciSearch:
         worker = threading.get_ident()
         identity = (profile["id"], rules.hash_mb, rules.affinity, rules.below_normal)
+        paths = [profile["path"], *(n["path"] for n in profile.get("networks", []) if n.get("path"))]
+        stats = [Path(path).stat() for path in paths]
+        fingerprint = tuple((s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns) for s in stats)
         with self.lock:
+            if self.verified.get(profile["id"]) != fingerprint:
+                verify_engine_files(profile)
+                self.verified[profile["id"]] = fingerprint
             previous = self.engines.get(worker)
             if previous and previous[0] == identity:
                 previous[1].game = object()
@@ -165,12 +171,6 @@ class EngineWorkers:
             if previous:
                 self.engines.pop(worker)
                 previous[1].close()
-            paths = [profile["path"], *(n["path"] for n in profile.get("networks", []) if n.get("path"))]
-            stats = [Path(path).stat() for path in paths]
-            fingerprint = tuple((s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) for s in stats)
-            if self.verified.get(profile["id"]) != fingerprint:
-                verify_engine_files(profile)
-                self.verified[profile["id"]] = fingerprint
             cpu = self.cpus[len(self.engines) % len(self.cpus)] if rules.affinity and self.cpus else None
             search = self.factory(profile, rules, cpu)
             self.engines[worker] = identity, search

@@ -12,7 +12,7 @@ from mistake_scanner.acquisition import archive_sources, records
 from mistake_scanner.database import Library
 from mistake_scanner.engines import inspect_engine
 from mistake_scanner.exports import annotated_pgn, moment_data, write_export
-from mistake_scanner.model import GameFilter, Score, SearchSettings, Source, Variation, file_digest
+from mistake_scanner.model import GameFilter, Score, SearchSettings, Source, Variation, board_at, file_digest, position_key
 from mistake_scanner.network import Network
 from mistake_scanner.runner import Runner
 from conftest import SAMPLE, executable_from_env
@@ -25,6 +25,26 @@ def wait_for(predicate, timeout=30):
             return value
         sleep(0.05)
     raise AssertionError("Pipeline did not reach its expected state.")
+
+
+def test_library_requires_evidence_before_labeling_a_missed_reply(tmp_path, fake_profile, pgn):
+    library = Library(tmp_path / "library.sqlite3")
+    game = next(records(StringIO(SAMPLE), GameFilter()))[1]
+    scan = library.create_scan("Missed reply check", [Source.local(pgn)], GameFilter(), SearchSettings(), fake_profile, 0)
+    assert library.import_game(library.ready_source()["id"], scan, game, 1)
+    with library.transaction() as db:
+        for ply in (5, 6):
+            db.execute("""
+                INSERT INTO mistakes(scan_game, ply, position, played, state, discovery, detail)
+                VALUES (1, ?, ?, ?, 'verified', '{}', '{"punishment":{"missed":false}}')
+            """, (ply, position_key(board_at(game["root"], game["moves"], ply - 1)), game["moves"][ply - 1]))
+    assert library.game_page()[0]["moments"] == 2
+    assert library.game_page()[0]["missed"] == 0
+    assert not any(row["missed"] for row in library.discovery_browser_page())
+    with library.transaction() as db:
+        db.execute("UPDATE mistakes SET detail=json_set(detail,'$.punishment.missed',1) WHERE ply=5")
+    assert library.game_page()[0]["missed"] == 1
+    assert [row["ply"] for row in library.discovery_browser_page() if row["missed"]] == [6]
 
 
 class ScriptedStockfish:

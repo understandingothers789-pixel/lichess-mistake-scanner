@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import chess
-from PySide6.QtCore import QSignalBlocker, QTimer, Signal
+from PySide6.QtCore import QItemSelectionModel, QSignalBlocker, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLineEdit, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from ..model import SPEEDS, board_at
+from ..model import SPEEDS, move_position
 from .review import NAMES, _clock, _prob, export_ui
 from .theme import ACCENT, AMBER, MUTED, Task, button, cell, combo, label, table, time_control_label
 
@@ -40,6 +40,7 @@ class LibraryView(QWidget):
         self.task = None
         self.fetch = None
         self.wanted = None
+        self.loaded = None
         self.last_signature = None
         self.active_group = None
         self.group_page = 0
@@ -244,7 +245,7 @@ class LibraryView(QWidget):
             if self.active_group is None:
                 return self.library.discovery_groups, options
             return self.library.group_members, {**options, "position": self.active_group[0], "played": self.active_group[1]}
-        return self.library.discovery_page, options
+        return self.library.discovery_browser_page, options
 
     def _result_table(self, view):
         return {"games": self.game_table, "groups": self.group_table,
@@ -284,17 +285,21 @@ class LibraryView(QWidget):
         self.wanted = request
         if self.fetch is not None:
             return
+        revision = self.library.change_token()
+        if not force and self.loaded == (request, revision):
+            return
         last_game = self.last_time_control_game
 
         def load(_):
             try:
-                revision, controls = self.library.time_controls_since(last_game)
-                return revision, controls, query(**options, limit=PAGE + 1, offset=page * PAGE)
+                latest_game, controls = self.library.time_controls_since(last_game)
+                return latest_game, controls, query(**options, limit=PAGE + 1, offset=page * PAGE)
             finally:
                 self.library.close_thread()
 
         def receive(results):
             if self.wanted == request:
+                self.loaded = (request, revision)
                 self.last_time_control_game, controls, rows = results
                 self._show_time_controls(controls)
                 self._show_results(view, page, rows)
@@ -329,15 +334,27 @@ class LibraryView(QWidget):
         signature = (view, page, rows, next_page)
         if signature == self.last_signature:
             return
+        actual = self._result_table(view)
+        old_view = self.last_signature[0] if self.last_signature else None
+        selected = {
+            self.rows[index.row()]["id"] for index in actual.selectionModel().selectedRows()
+            if old_view == view and index.row() < len(self.rows) and "id" in self.rows[index.row()]
+        }
+        old_row = actual.currentRow()
+        current = self.rows[old_row].get("id") if old_view == view and 0 <= old_row < len(self.rows) else None
         self.last_signature = signature
         self.rows = rows
-        actual = self._result_table(view)
         actual.setRowCount(0)
         actual.setRowCount(len(rows))
         populate = {"games": self._game_row, "moments": self._discovery_row,
                     "groups": self._group_row, "members": self._member_row}[view]
         for row, item in enumerate(rows):
             populate(row, item)
+            if item.get("id") in selected:
+                flags = QItemSelectionModel.SelectionFlag
+                actual.selectionModel().select(actual.model().index(row, 0), flags.Select | flags.Rows)
+            if current is not None and item.get("id") == current:
+                actual.selectionModel().setCurrentIndex(actual.model().index(row, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
         self.prev.setEnabled(page > 0)
         self.next.setEnabled(next_page)
         self.open.setEnabled(bool(rows))
@@ -364,8 +381,7 @@ class LibraryView(QWidget):
             self.game_table.setItem(row, column, cell(value, ACCENT if column == 6 else None, str(value) if value else None))
 
     def _discovery_row(self, row, item):
-        game = self.library.game(item["scan_game"])
-        board = board_at(game["root"], game["moves"], item["ply"] - 1)
+        board = move_position(item["position"], item["root"], item["ply"])
         san = board.san(chess.Move.from_uci(item["played"]))
         turn = f"{board.fullmove_number}{'.' if board.turn else '…'}"
         ratings = " / ".join("—" if item[f"{color}_elo"] is None else str(item[f"{color}_elo"])

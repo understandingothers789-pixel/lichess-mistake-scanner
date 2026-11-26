@@ -1,13 +1,40 @@
 from dataclasses import replace
+from pathlib import Path
 
 import chess
 import chess.engine
 import pytest
 
-from mistake_scanner.analysis import AdaptiveDepth, analyse_critical, discover, loss
+from mistake_scanner.analysis import AdaptiveDepth, EngineWorkers, analyse_critical, discover, loss
 from mistake_scanner.database import Library
-from mistake_scanner.model import Score, SearchSettings, Variation, board_at
+from mistake_scanner.model import Score, SearchSettings, Variation, board_at, move_position, position_key
 from conftest import game_moves
+
+
+def test_retained_engine_detects_an_executable_changed_on_disk(fake_profile):
+    class Search:
+        def close(self):
+            pass
+
+    pool = EngineWorkers([], factory=lambda *_: Search())
+    try:
+        rules = SearchSettings()
+        initial = pool.acquire(fake_profile, rules)
+        assert pool.acquire(fake_profile, rules) is initial
+        Path(fake_profile["path"]).write_bytes(b"replacement executable")
+        with pytest.raises(ValueError, match="executable changed"):
+            pool.acquire(fake_profile, rules)
+    finally:
+        pool.close()
+
+
+def test_saved_move_position_preserves_fen_starting_with_black():
+    root = "4k3/8/8/8/8/8/4P3/4K3 b - - 0 30"
+    before_white = board_at(root, ["e8d7"], 1)
+    restored = move_position(position_key(before_white), root, 2)
+    assert restored.fullmove_number == before_white.fullmove_number == 31
+    assert restored.turn == chess.WHITE
+    assert restored.san(chess.Move.from_uci("e2e4")) == "e4"
 
 
 @pytest.mark.parametrize("best,played,expected", [

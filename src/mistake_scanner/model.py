@@ -181,3 +181,11 @@ def board_at(root: str, moves: list[str], ply: int | None = None) -> chess.Board
 
 def position_key(board: chess.Board) -> str:
     return " ".join(board.fen().split()[:4])
+
+
+def move_position(position: str, root: str, ply: int) -> chess.Board:
+    """Restore a saved position with the move number from its source game."""
+    board = chess.Board(position)
+    fields = root.split()
+    board.fullmove_number = int(fields[5]) + (ply - 1 + (fields[1] == "b")) // 2
+    return board

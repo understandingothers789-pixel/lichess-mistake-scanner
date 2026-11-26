@@ -1,5 +1,12 @@
 # What changed
 
+## v0.1.16
+
+- Speed up Library pages by loading summaries and using saved positions for move notation. Preserve selected games and findings when results refresh.
+- Reduce repeated work in Analysis, Scanner progress, archive date filtering, and idle queue polling.
+- Count a missed reply only when the preceding finding records one. Look up occurrences for the position currently on the board, including variations.
+- Recheck retained Stockfish workers when their executable or network files change on disk.
+
 ## v0.1.15
 
 - Redesigned the app icon with a coral magnifier and chess squares for the toolbar, window, and Windows executable.

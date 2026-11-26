@@ -235,7 +235,17 @@ def _known(value: str | None) -> str | None:
     return value if value and value not in ("?", "-", "??") else None
 
 
-def metadata(headers, known_rated: bool | None = None) -> dict:
+def _game_day(headers) -> str | None:
+    day = _known(headers.get("UTCDate")) or _known(headers.get("Date"))
+    if day:
+        try:
+            return date.fromisoformat(day.replace(".", "-")).isoformat()
+        except ValueError:
+            pass
+    return None
+
+
+def metadata(headers, known_rated: bool | None = None, *, day: str | None = None) -> dict:
     def elo(name: str) -> int | None:
         value = headers.get(name, "")
         return int(value) if value.isascii() and value.isdecimal() and len(value) <= 5 else None
@@ -252,12 +262,6 @@ def metadata(headers, known_rated: bool | None = None) -> dict:
             (30, "ultrabullet"), (180, "bullet"), (480, "blitz"), (1500, "rapid"),
             (float("inf"), "classical"),
         ) if duration < ceiling)
-    day = _known(headers.get("UTCDate")) or _known(headers.get("Date"))
-    if day:
-        try:
-            day = date.fromisoformat(day.replace(".", "-")).isoformat()
-        except ValueError:
-            day = None
     site = _known(headers.get("Site"))
     game_id = None
     if site:
@@ -274,14 +278,32 @@ def metadata(headers, known_rated: bool | None = None) -> dict:
     return {
         "white": _known(headers.get("White")), "black": _known(headers.get("Black")),
         "white_elo": elo("WhiteElo"), "black_elo": elo("BlackElo"),
-        "day": day, "utc_time": _known(headers.get("UTCTime")), "time_control": tc,
+        "day": day or _game_day(headers), "utc_time": _known(headers.get("UTCTime")), "time_control": tc,
         "speed": speed, "rated": rated, "eco": _known(headers.get("ECO")),
         "opening": _known(headers.get("Opening")), "result": _known(headers.get("Result")),
         "site": site, "lichess_id": game_id,
     }
 
 
+def _matches_calendar(day, started, filters, days=None) -> bool:
+    if days is not None and day not in days:
+        return False
+    if filters.since and (not day or day < filters.since):
+        return False
+    if filters.until and (not day or day > filters.until):
+        return False
+    if filters.utc_start:
+        if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?", started or ""):
+            return False
+        return filters.utc_start <= started[:5] < filters.utc_end
+    return True
+
+
 def matches(meta: dict, filters: GameFilter) -> bool:
+    return _matches_calendar(meta.get("day"), meta.get("utc_time"), filters) and _matches_game(meta, filters)
+
+
+def _matches_game(meta: dict, filters: GameFilter) -> bool:
     if filters.min_rating is not None or filters.max_rating is not None:
         ratings = [
             rating is not None and (filters.min_rating is None or rating >= filters.min_rating)
@@ -296,16 +318,6 @@ def matches(meta: dict, filters: GameFilter) -> bool:
         return False
     for value, name in ((filters.time_control, "time_control"), (filters.eco.upper(), "eco")):
         if value and meta[name] != value:
-            return False
-    if filters.since and (not meta["day"] or meta["day"] < filters.since):
-        return False
-    if filters.until and (not meta["day"] or meta["day"] > filters.until):
-        return False
-    if filters.utc_start:
-        started = meta.get("utc_time") or ""
-        if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?", started):
-            return False
-        if not filters.utc_start <= started[:5] < filters.utc_end:
             return False
     if filters.opening and filters.opening.casefold() not in (meta["opening"] or "").casefold():
         return False
@@ -345,9 +357,11 @@ def records(text, filters: GameFilter, start: int = 0, check=lambda: None, *, re
     """Yield a record index and outcome for every complete imported PGN."""
     reader = RecordReader(text, check)
     index = 0
+    use_calendar = days is not None or bool(filters.since or filters.until or filters.utc_start)
 
     class FilteredBuilder(chess.pgn.GameBuilder):
         has_result = False
+        meta = None
 
         def end_headers(self):
             self.reason = ""
@@ -356,9 +370,14 @@ def records(text, filters: GameFilter, start: int = 0, check=lambda: None, *, re
             elif self.game.headers.get("Variant", "standard").lower() not in STANDARD:
                 self.reason = "variant"
             else:
-                meta = metadata(self.game.headers, known_rated)
-                if (days is not None and meta["day"] not in days) or not matches(meta, filters):
+                headers = self.game.headers
+                day = _game_day(headers) if use_calendar else None
+                if use_calendar and not _matches_calendar(day, headers.get("UTCTime"), filters, days):
                     self.reason = "filtered"
+                else:
+                    self.meta = metadata(headers, known_rated, day=day)
+                    if not _matches_game(self.meta, filters):
+                        self.reason = "filtered"
             if self.reason:
                 reader.reset(False)
                 return chess.pgn.SKIP
@@ -372,7 +391,7 @@ def records(text, filters: GameFilter, start: int = 0, check=lambda: None, *, re
             super().visit_result(result)
 
         def result(self):
-            return self.game, getattr(self, "reason", ""), self.has_result
+            return self.game, getattr(self, "reason", ""), self.has_result, self.meta
 
     while True:
         reader.reset(keep=index >= start)
@@ -380,12 +399,16 @@ def records(text, filters: GameFilter, start: int = 0, check=lambda: None, *, re
         entry = chess.pgn.read_game(reader, Visitor=FilteredBuilder)
         if entry is None:
             return
-        game, reason, complete = entry
+        game, reason, complete, meta = entry
         if reason:
             yield index, None, reason
             continue
-        if game.errors or (remote and not complete) or game.board().chess960:
-            yield index, None, "malformed" if game.errors or not complete else "variant"
+        if game.errors or (remote and not complete):
+            yield index, None, "malformed"
+            continue
+        board = game.board()
+        if board.chess960:
+            yield index, None, "variant"
             continue
         nodes = list(game.mainline())
         if not nodes:
@@ -395,8 +418,14 @@ def records(text, filters: GameFilter, start: int = 0, check=lambda: None, *, re
         if filters.clocks and not any(clock is not None for clock in clocks):
             yield index, None, "filtered"
             continue
-        meta = metadata(game.headers, known_rated)
-        root = game.board().fen(en_passant="fen")
+        if meta is None:
+            meta = metadata(game.headers, known_rated)
+            if (days is not None and meta["day"] not in days) or not matches(meta, filters):
+                yield index, None, "filtered"
+                continue
+        else:
+            meta["result"] = _known(game.headers.get("Result"))
+        root = board.fen(en_passant="fen")
         moves = [node.move.uci() for node in nodes]
         identity = key([root, moves, meta["lichess_id"] or meta])
         yield index, {

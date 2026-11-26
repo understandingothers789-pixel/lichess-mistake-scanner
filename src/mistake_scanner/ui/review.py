@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 
 from ..analysis import retained_outcome
 from ..exports import san_line, write_export
-from ..model import Score, SearchSettings, Variation, board_at, position_key
+from ..model import Score, SearchSettings, Variation, board_at, move_position, position_key
 from .board import BoardWidget, EvalGraph
 from .preview import VariationPreview
 from .theme import ACCENT, AMBER, MAIA, MUTED, Task, button, cell, error, label, score_color, table, time_control_label
@@ -478,23 +478,26 @@ class Review(QWidget):
     def refresh(self):
         if not self.game:
             return
-        self.game = self.library.game(self.game["scan_game"])
-        moments = self.library.moments(self.game["scan_game"])
-        evaluations = self.library.evaluations(self.game["scan_game"])
-        signature = (len(evaluations), tuple((m["id"], m["state"], m["probability"], m["reviewed"], m["bookmarked"])
-                                             for m in moments))
+        identity = self.game["scan_game"]
+        signature = self.library.review_signature(identity)
         if signature != self.last_signature:
             self.last_signature = signature
+            self.game["reviewed"], self.game["bookmarked"] = signature[0]
+            moments = self.library.moments(identity)
+            evaluations = self.library.evaluations(identity)
             self.moments, self.evaluations = moments, evaluations
             self.position_info.clear()
+            cached = {}
             for moment in moments:
                 detail = moment["detail"]
                 if detail:
                     for before, field in ((True, "before_key"), (False, "after_key")):
                         point = moment["ply"] - int(before)
-                        lines = self.library.cached_search(detail[field])
-                        if lines:
-                            self.position_info[point] = lines[0]
+                        key = detail[field]
+                        if key not in cached:
+                            cached[key] = self.library.first_cached_line(key)
+                        if cached[key]:
+                            self.position_info[point] = cached[key]
             self._score_rows()
             markers = {m["ply"]: m["state"] for m in self.moments}
             series = {ply: (Score(**item["score"]), item["depth"], item["depth"] == self.fast_depth, False)
@@ -528,12 +531,11 @@ class Review(QWidget):
         self.score_items[0] = root, 1
         root.setData(1, Qt.ItemDataRole.UserRole, (0, ()))
 
-        def branch(node, item, anchor, pv):
-            board = node.parent.board()
+        def branch(node, item, anchor, pv, board):
             col = 1 if board.turn else 3
             score = node.eval()
             row = QTreeWidgetItem([f"{board.fullmove_number}." if board.turn else f"{board.fullmove_number}…"])
-            row.setText(col, node.san())
+            row.setText(col, board.san_and_push(node.move))
             row.setForeground(col, QColor(MUTED))
             if score:
                 evaluation = Score.from_uci(score)
@@ -541,15 +543,17 @@ class Review(QWidget):
                 row.setForeground(col + 1, QColor(score_color(evaluation)))
             item.addChild(row)
             line = (*pv, node.move.uci())
+            depth = node.eval_depth()
             for column in (col, col + 1):
                 row.setData(column, Qt.ItemDataRole.UserRole, (anchor, line))
-                row.setToolTip(column, f"PGN variation · d{node.eval_depth()}" if node.eval_depth() else "PGN variation")
+                row.setToolTip(column, f"PGN variation · d{depth}" if depth else "PGN variation")
             for child in node.variations:
-                branch(child, row, anchor, line)
+                branch(child, row, anchor, line, board)
+            board.pop()
 
         row = None
+        move_board = game.board()
         for ply, node in enumerate(game.mainline(), 1):
-            move_board = node.parent.board()
             col = 1 if move_board.turn else 3
             if row is None or move_board.turn:
                 row = QTreeWidgetItem([f"{move_board.fullmove_number}."])
@@ -564,21 +568,23 @@ class Review(QWidget):
                     and (moments[ply - 1]["detail"].get("punishment") or {}).get("missed")
                 ) else "Mistake"
                 row.setForeground(col, QColor(AMBER))
-            row.setText(col, f"{node.san()}  {'?!' if state == 'Candidate' else '?' if state else ''}".rstrip())
+            san = move_board.san(node.move)
+            row.setText(col, f"{san}  {'?!' if state == 'Candidate' else '?' if state else ''}".rstrip())
             row.setText(col + 1, score.display() if score else "—")
             row.setForeground(col + 1, QColor(score_color(score) if score else MUTED))
             for column in (col, col + 1):
                 row.setData(column, Qt.ItemDataRole.UserRole, (ply, ()))
-                row.setToolTip(column, " · ".join(part for part in (node.san(), scan_label, state) if part))
+                row.setToolTip(column, " · ".join(part for part in (san, scan_label, state) if part))
             self.score_items[ply] = row, col
             for alternative in node.parent.variations[1:]:
-                branch(alternative, self.score_items[ply - 1][0], ply - 1, ())
+                branch(alternative, self.score_items[ply - 1][0], ply - 1, (), move_board)
+            move_board.push(node.move)
         self.moves.setCurrentItem(*self.score_items.get(self.ply, (root, 1)))
 
     def _moment_rows(self):
         self.moment_table.setRowCount(len(self.moments))
         for row, moment in enumerate(self.moments):
-            board = board_at(self.game["root"], self.game["moves"], moment["ply"] - 1)
+            board = move_position(moment["position"], self.game["root"], moment["ply"])
             notation = board.san(chess.Move.from_uci(moment["played"]))
             detail = moment["detail"]
             reason = detail["reason"] if detail else moment["discovery"]["reason"]
@@ -1068,7 +1074,7 @@ class Review(QWidget):
         dialog.exec()
 
     def _occurrences(self):
-        board = self._root()
+        board = self.board.board
         position = position_key(board)
         frequency = self.library.frequency(position)
         games = self.library.position_games(position)

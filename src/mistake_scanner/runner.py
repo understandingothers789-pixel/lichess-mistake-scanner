@@ -330,7 +330,7 @@ class Runner:
                 raise Interrupted()
             if force or time.monotonic() - last_check > 0.25:
                 last_check = time.monotonic()
-                scan = self.library.scan(scan_id)
+                scan = self.library.intake_status(scan_id)
                 if scan["state"] != "running":
                     raise Interrupted()
 
@@ -403,8 +403,7 @@ class Runner:
                 except (httpx.TransportError, zstandard.ZstdError):
                     if source.kind == "local" or attempt == 3:
                         raise
-                    current = self.library.scan_progress(scan_id)["sources"]
-                    start = next(item["seen"] for item in current if item["id"] == source_id)
+                    start = self.library.source_cursor(source_id)
                     progress(0, None, "Connection interrupted · replaying saved records")
                     wait(network.delay(attempt))
         except Interrupted:

@@ -710,9 +710,8 @@ class ScannerView(QWidget):
         task.start()
 
     def refresh(self, *_):
-        scans = self.library.scans()
         active = self.active_scan.currentData()
-        choices = [(row["id"], row["name"], row["state"]) for row in scans]
+        choices = self.library.scan_choices()
         if choices != self.scan_snapshot:
             self.scan_snapshot = choices
             self.active_scan.blockSignals(True)
@@ -738,7 +737,7 @@ class ScannerView(QWidget):
         self.download_model.setEnabled(self.model_task is None)
         self.choose_model.setEnabled(self.model_task is None)
 
-        row = next((item for item in scans if item["id"] == active), None)
+        row = self.library.scan(active) if active is not None else None
         info = self.runner.active()
         if row is None:
             for widget in (self.pause, self.resume, self.cancel):
