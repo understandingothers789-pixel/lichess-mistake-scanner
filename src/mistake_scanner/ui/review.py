@@ -291,7 +291,7 @@ class Review(QWidget):
         analysis_layout.addWidget(self.scan_decision)
         analysis_layout.addWidget(self.comparison_status)
         self.line_table = table(["Move", "Eval", "Continuation", "Depth", "Maia"])
-        self.line_table.setToolTip("Hover a line for a small board preview. Click a line to play it on the main board.")
+        self.line_table.setAccessibleDescription("Hover a line for a small board preview. Click a line to play it on the main board.")
         for column, tip in enumerate((
             "First move in the suggested line.", "Positive scores favor White. Negative scores favor Black.",
             "Moves Stockfish expects after the first move.", "How far Stockfish searched, in half-moves.",

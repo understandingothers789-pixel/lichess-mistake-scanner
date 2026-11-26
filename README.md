@@ -2,7 +2,7 @@
 
 Second Look is a standalone Windows x64 desktop application for finding chess mistakes in Lichess games. It streams games, records Stockfish analysis in a local SQLite library, and uses Maia 3 79M to rank verified mistakes by how likely a human at the relevant rating was to play them. Open a discovery to see its game, engine lines, and probabilities immediately.
 
-[**Download Second Look v0.1.14 for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.14/SecondLook-windows-x64.zip) · [**Download the Python edition**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.14/SecondLook-Python.zip) · [What changed in v0.1.14](CHANGELOG.md#v0114)
+[**Download Second Look v0.1.15 for Windows 11 x64**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.15/SecondLook-windows-x64.zip) · [**Download the Python edition**](https://github.com/understandingothers789-pixel/lichess-mistake-scanner/releases/download/v0.1.15/SecondLook-Python.zip) · [What changed in v0.1.15](CHANGELOG.md#v0115)
 
 The Windows release includes the Maia CPU runtime. Extract the whole ZIP, launch SecondLook.exe, then use **Scanner → Download model** to fetch the verified checkpoint.
 

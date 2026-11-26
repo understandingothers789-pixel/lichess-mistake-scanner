@@ -7,8 +7,8 @@ from time import monotonic, sleep
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import chess
-from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QWheelEvent
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -115,7 +115,9 @@ def test_full_information_navigation_and_scanner_stay_responsive(tmp_path, pgn, 
         assert review.line_table.item(0, 0).text().startswith("Qxf7")
         point = review.line_table.visualItemRect(review.line_table.item(0, 0)).center()
         viewport = review.line_table.viewport()
-        QTest.mouseMove(viewport, point)
+        hover = QMouseEvent(QEvent.Type.MouseMove, QPointF(point), QPointF(viewport.mapToGlobal(point)),
+                            Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(viewport, hover)
         pump(app, lambda: review.variation_preview.isVisible())
         preview = review.variation_preview
         assert preview.board.board.is_checkmate()
